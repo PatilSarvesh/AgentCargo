@@ -41,7 +41,7 @@ describe("packSkillDirectory", () => {
     const result = await packSkillDirectory(examplePath, path.join(parent, "hello.agentcargo"));
 
     expect(result.digest).toBe(
-      "sha256:f1b850b32edf57eeaa8eb07ec807e0a2f63b51805d87994e176c1c43ea08d523",
+      "sha256:7642e1b5daefdde9f75eb6ec45cd22571fda276cff29bc13b9c14f5ce3e5db84",
     );
   });
 

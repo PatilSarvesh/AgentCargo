@@ -143,7 +143,7 @@ CLI pack error smoke test PASS with stable JSON error
 CLI local add smoke test  PASS with Codex project install and lockfile
 CLI repeated add test     PASS with stable INSTALL_ALREADY_RECORDED error
 Example skill validation  PASS with no findings
-Canonical example digest  PASS: sha256:f1b850b32edf57eeaa8eb07ec807e0a2f63b51805d87994e176c1c43ea08d523
+Canonical example digest  PASS: sha256:7642e1b5daefdde9f75eb6ec45cd22571fda276cff29bc13b9c14f5ce3e5db84
 Standard TAR inspection   PASS
 Whitespace scan and git diff --check PASS
 ```
