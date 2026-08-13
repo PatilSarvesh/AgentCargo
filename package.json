@@ -1,0 +1,17 @@
+{
+  "name": "agentcargo-workspace",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Cross-agent registry and package manager for reusable AI-agent skills.",
+  "packageManager": "pnpm@11.16.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "pnpm --recursive build",
+    "check": "pnpm --recursive check",
+    "test": "pnpm build && pnpm --recursive test",
+    "verify": "pnpm check && pnpm test",
+    "dev:cli": "pnpm build && node packages/cli/dist/index.js"
+  }
+}

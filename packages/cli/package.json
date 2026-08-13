@@ -1,0 +1,30 @@
+{
+  "name": "@agentcargo/cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Create, validate, and manage portable AI-agent skills.",
+  "type": "module",
+  "bin": {
+    "agentcargo": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "dev": "pnpm --filter @agentcargo/core build && tsc -p tsconfig.json && node dist/index.js"
+  },
+  "dependencies": {
+    "@agentcargo/adapter-codex": "workspace:*",
+    "@agentcargo/adapter-contract": "workspace:*",
+    "@agentcargo/core": "workspace:*",
+    "commander": "^14.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

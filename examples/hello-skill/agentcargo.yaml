@@ -1,0 +1,20 @@
+schema_version: 1
+name: hello-skill
+version: 0.1.0
+description: Greets the user warmly. Use when the user asks for a greeting or a friendly welcome.
+license: MIT
+compatibility:
+  codex:
+    scopes:
+      - project
+      - user
+capabilities:
+  filesystem:
+    read: false
+    write: false
+  shell: false
+  network: false
+  environment: []
+tags:
+  - example
+  - greeting
