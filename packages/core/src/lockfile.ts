@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, open, rename, rm } from "node:fs/promises";
+import { lstat, mkdir, open, rename, rm, unlink } from "node:fs/promises";
 import path from "node:path";
 import { parse, stringify } from "yaml";
 import type {
@@ -123,6 +123,22 @@ export async function writeLockfileAtomic(
     await rm(temporaryPath, { force: true }).catch(() => undefined);
     throw error;
   }
+}
+
+export async function removeLockfileAtomic(lockfilePath: string): Promise<void> {
+  const resolved = path.resolve(lockfilePath);
+  const fileStat = await lstat(resolved).catch((error: unknown) => {
+    if (isNodeError(error) && error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (!fileStat) return;
+  if (!fileStat.isFile() || fileStat.isSymbolicLink()) {
+    throw new AgentCargoLockfileError(
+      "LOCKFILE_NOT_REGULAR_FILE",
+      `Lockfile must be a regular file: ${resolved}`,
+    );
+  }
+  await unlink(resolved);
 }
 
 export function validateLockfile(value: unknown): AgentCargoLockfile {

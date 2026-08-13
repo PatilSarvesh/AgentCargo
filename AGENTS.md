@@ -145,6 +145,9 @@ The source standard is <https://agentskills.io/specification>. Codex-specific co
 - Codex project skills install to `<project-root>/.agents/skills/<name>` and user skills to `<user-home>/.agents/skills/<name>`, verified against official OpenAI documentation on 2026-08-13.
 - Project lockfiles live at `<project-root>/agentcargo.lock`; user lockfiles live in AgentCargo's platform-specific data directory beneath the user home.
 - Local installations vendor host-ready files, omit registry-only `agentcargo.yaml`, and record the artifact plus every installed file in lockfile v1.
+- Lifecycle inspection recomputes lockfile-owned receipts and classifies installations as clean, modified, missing, or invalid without following links.
+- Removal requires explicit confirmation, refuses drift unless forced, always rejects invalid path types, and preserves untracked content while deleting only receipt-owned files.
+- Scope mutations share `.agentcargo-operation.lock`; `agentcargo doctor` reports stale locks and abandoned staging paths without automatically deleting them.
 - No transitive skill dependency resolver in MVP.
 
 ## Current repository structure
@@ -158,6 +161,7 @@ examples/            Valid example skill fixtures
 docs/PRD.md          Product requirements and scope
 docs/ARCHITECTURE.md Technical architecture and security boundaries
 docs/ROADMAP.md      Milestone sequence
+docs/THREAT_MODEL.md Local and planned hosted security boundaries
 docs/STATUS.md       Current implementation status and next work
 ```
 
@@ -168,9 +172,12 @@ agentcargo init [path]
 agentcargo validate [path]
 agentcargo pack [path]
 agentcargo add <local-path> --agent codex --scope <project|user>
+agentcargo list --agent codex --scope <project|user|all>
+agentcargo remove <package> --agent codex --scope <project|user> --yes
+agentcargo doctor --agent codex --scope <project|user|all>
 ```
 
-These commands support the current local workflow. Validation, packing, and installation also support `--json`. Remote registry installation and the other commands documented in the PRD are proposals until listed as completed in `docs/STATUS.md`.
+These commands support the current local workflow and machine-readable `--json` output. Remote registry installation and the other commands documented in the PRD are proposals until listed as completed in `docs/STATUS.md`.
 
 ## Development commands
 
@@ -183,6 +190,9 @@ pnpm verify
 pnpm dev:cli validate ./examples/hello-skill
 pnpm dev:cli pack ./examples/hello-skill
 pnpm dev:cli add ./examples/hello-skill --agent codex --scope project --project-root <test-project>
+pnpm dev:cli list --agent codex --scope project --project-root <test-project>
+pnpm dev:cli doctor --agent codex --scope project --project-root <test-project>
+pnpm dev:cli remove hello-skill --agent codex --scope project --project-root <test-project> --yes
 ```
 
 Node.js 22 or newer and pnpm 11 are required. pnpm dependency build scripts are deny-by-default; only explicitly reviewed packages may be enabled in `pnpm-workspace.yaml`.

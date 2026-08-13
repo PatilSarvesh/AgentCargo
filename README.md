@@ -6,7 +6,7 @@ Creators publish a skill once. Developers can then discover, inspect, install, u
 
 ## Project status
 
-AgentCargo is in early MVP development. The local workflow can create, validate, deterministically package, and install a skill into Codex project or user scope with SHA-256 verification and ownership tracking. Registry publishing and remote installation are not implemented yet.
+AgentCargo is in early MVP development. The local workflow can create, validate, deterministically package, install, inspect, safely remove, and diagnose a skill in Codex project or user scope with SHA-256 verification and ownership tracking. Registry publishing and remote installation are not implemented yet.
 
 ## Try the current CLI
 
@@ -33,11 +33,30 @@ pnpm dev:cli add ./examples/hello-skill \
   --scope project \
   --project-root ./agentcargo-demo
 
+# Inspect the installation and any local drift
+pnpm dev:cli list \
+  --agent codex \
+  --scope project \
+  --project-root ./agentcargo-demo
+
+# Diagnose host paths, lockfiles, drift, and interrupted operations
+pnpm dev:cli doctor \
+  --agent codex \
+  --scope project \
+  --project-root ./agentcargo-demo
+
+# Remove an unchanged installation after explicit confirmation
+pnpm dev:cli remove hello-skill \
+  --agent codex \
+  --scope project \
+  --project-root ./agentcargo-demo \
+  --yes
+
 # Validate the checked-in example
 pnpm dev:cli validate ./examples/hello-skill
 ```
 
-Machine-readable validation and packing output are available with `--json`.
+Machine-readable output is available with `--json`. Removal refuses local drift unless `--force --yes` is provided; forced removal still preserves untracked files and refuses links or special files.
 
 ## Product principles
 
@@ -55,6 +74,7 @@ Machine-readable validation and packing output are available with `--json`.
 - [Product requirements](docs/PRD.md)
 - [Technical architecture](docs/ARCHITECTURE.md)
 - [Implementation roadmap](docs/ROADMAP.md)
+- [Threat model](docs/THREAT_MODEL.md)
 
 ## Proposed CLI experience
 
@@ -66,7 +86,7 @@ agentcargo update --dry-run
 agentcargo audit
 ```
 
-Local-path `init`, `validate`, `pack`, and `add` are implemented today. The remaining commands describe the MVP direction.
+Local-path `init`, `validate`, `pack`, `add`, `list`, `remove`, and `doctor` are implemented today. The remaining commands describe the MVP direction.
 
 ## Initial open-source boundary
 

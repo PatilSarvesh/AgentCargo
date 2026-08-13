@@ -115,3 +115,63 @@ export interface InstallLocalSkillResult {
   filesDigest: string;
   files: InstalledFileRecord[];
 }
+
+export type InstallationState = "clean" | "modified" | "missing" | "invalid";
+
+export interface InvalidInstalledPath {
+  path: string;
+  reason: string;
+}
+
+export interface InstallationInspection {
+  package: string;
+  version: string;
+  agent: string;
+  scope: "project" | "user";
+  destination: string;
+  state: InstallationState;
+  missingFiles: string[];
+  modifiedFiles: string[];
+  untrackedPaths: string[];
+  invalidPaths: InvalidInstalledPath[];
+  actualFilesDigest?: string;
+}
+
+export interface InstallationListResult {
+  agent: string;
+  scope: "project" | "user";
+  scopeRoot: string;
+  skillsRoot: string;
+  lockfilePath: string;
+  packages: InstallationInspection[];
+}
+
+export interface RemoveInstallationResult {
+  package: string;
+  version: string;
+  agent: string;
+  scope: "project" | "user";
+  destination: string;
+  lockfilePath: string;
+  previousState: InstallationState;
+  preservedUntracked: boolean;
+  preservedPaths: string[];
+}
+
+export interface DoctorFinding {
+  code: string;
+  severity: "error" | "warning";
+  message: string;
+  path?: string;
+}
+
+export interface DoctorResult {
+  agent: string;
+  scope: "project" | "user";
+  healthy: boolean;
+  scopeRoot?: string;
+  skillsRoot?: string;
+  lockfilePath?: string;
+  installations: InstallationInspection[];
+  findings: DoctorFinding[];
+}

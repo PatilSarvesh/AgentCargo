@@ -81,6 +81,144 @@ describe("agentcargo add", () => {
   });
 });
 
+describe("agentcargo local lifecycle", () => {
+  it("lists an installed skill with its clean drift state", async () => {
+    const root = await createTemporaryDirectory();
+    const projectRoot = path.join(root, "project");
+    await mkdir(projectRoot);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    await installExample(projectRoot);
+    log.mockClear();
+
+    await program.parseAsync([
+      "node",
+      "agentcargo",
+      "list",
+      "--agent",
+      "codex",
+      "--scope",
+      "project",
+      "--project-root",
+      projectRoot,
+      "--json",
+    ]);
+
+    expect(process.exitCode).toBeUndefined();
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      ok: true,
+      installations: [{ packages: [{ package: "hello-skill", state: "clean" }] }],
+    });
+  });
+
+  it("requires explicit confirmation before removal", async () => {
+    const root = await createTemporaryDirectory();
+    const projectRoot = path.join(root, "project");
+    await mkdir(projectRoot);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    await installExample(projectRoot);
+    log.mockClear();
+
+    await program.parseAsync([
+      "node",
+      "agentcargo",
+      "remove",
+      "hello-skill",
+      "--agent",
+      "codex",
+      "--scope",
+      "project",
+      "--project-root",
+      projectRoot,
+      "--json",
+    ]);
+
+    expect(process.exitCode).toBe(1);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      ok: false,
+      error: { code: "REMOVE_CONFIRMATION_REQUIRED" },
+    });
+    expect(await readFile(path.join(projectRoot, "agentcargo.lock"), "utf8")).toContain("hello-skill");
+  });
+
+  it("removes a clean installation after confirmation", async () => {
+    const root = await createTemporaryDirectory();
+    const projectRoot = path.join(root, "project");
+    await mkdir(projectRoot);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    await installExample(projectRoot);
+    log.mockClear();
+
+    await program.parseAsync([
+      "node",
+      "agentcargo",
+      "remove",
+      "hello-skill",
+      "--agent",
+      "codex",
+      "--scope",
+      "project",
+      "--project-root",
+      projectRoot,
+      "--yes",
+      "--json",
+    ]);
+
+    expect(process.exitCode).toBeUndefined();
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      ok: true,
+      package: "hello-skill",
+      preservedUntracked: false,
+    });
+    await expect(readFile(path.join(projectRoot, "agentcargo.lock"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("doctor reports an abandoned installation stage", async () => {
+    const root = await createTemporaryDirectory();
+    const projectRoot = path.join(root, "project");
+    await mkdir(path.join(projectRoot, ".agents", "skills", ".agentcargo-stage-interrupted"), {
+      recursive: true,
+    });
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await program.parseAsync([
+      "node",
+      "agentcargo",
+      "doctor",
+      "--agent",
+      "codex",
+      "--scope",
+      "project",
+      "--project-root",
+      projectRoot,
+      "--json",
+    ]);
+
+    expect(process.exitCode).toBe(1);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      ok: false,
+      diagnostics: [{ findings: [{ code: "DOCTOR_ABANDONED_INSTALL" }] }],
+    });
+  });
+});
+
+async function installExample(projectRoot: string): Promise<void> {
+  await program.parseAsync([
+    "node",
+    "agentcargo",
+    "add",
+    exampleSkill,
+    "--agent",
+    "codex",
+    "--scope",
+    "project",
+    "--project-root",
+    projectRoot,
+    "--json",
+  ]);
+}
+
 async function createTemporaryDirectory(): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), "agentcargo-cli-test-"));
   temporaryDirectories.push(root);

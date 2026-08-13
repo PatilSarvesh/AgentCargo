@@ -1,14 +1,11 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   lstat,
   mkdir,
   mkdtemp,
-  open,
-  readdir,
   realpath,
   rename,
   rm,
-  unlink,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -20,15 +17,14 @@ import type {
   InstallScope,
 } from "@agentcargo/adapter-contract";
 import { extractArtifact, normalizeArtifactPath, packSkillDirectory } from "./archive.js";
+import { inventoryRegularTree } from "./filesystem.js";
 import { readLockfile, writeLockfileAtomic } from "./lockfile.js";
+import { acquireOperationLock } from "./operation-lock.js";
 import { validateSkillDirectory } from "./skill.js";
 import type {
   AgentCargoLockEntry,
   InstallLocalSkillResult,
-  InstalledFileRecord,
 } from "./types.js";
-
-const STREAM_CHUNK_BYTES = 64 * 1024;
 
 export interface InstallLocalSkillInput {
   sourcePath: string;
@@ -116,7 +112,7 @@ export async function installLocalSkill(
     const packed = await packSkillDirectory(validation.root, artifactPath);
     const lockfilePath = await resolveLockfilePath(input, plan);
     const operationRoot = path.dirname(lockfilePath);
-    operationLock = await acquireOperationLock(operationRoot);
+    operationLock = await acquireOperationLock(operationRoot, "INSTALL_OPERATION_LOCKED");
 
     const lockfile = await readLockfile(lockfilePath);
     const existingEntry = lockfile.packages.find(
@@ -146,7 +142,7 @@ export async function installLocalSkill(
       package: adapterPackage,
     });
 
-    const inventory = await inventoryInstalledTree(stagedPackageRoot);
+    const inventory = await inventoryRegularTree(stagedPackageRoot);
     if (!inventory.files.some((file) => file.path === "SKILL.md")) {
       throw new AgentCargoInstallError(
         "INSTALL_STAGED_SKILL_INVALID",
@@ -344,115 +340,6 @@ async function assertDestinationMissing(destination: string): Promise<void> {
     if (isNodeError(error) && error.code === "ENOENT") return;
     throw error;
   }
-}
-
-async function acquireOperationLock(parent: string): Promise<{ release(): Promise<void> }> {
-  const lockPath = path.join(parent, ".agentcargo-install.lock");
-  let handle: Awaited<ReturnType<typeof open>>;
-  try {
-    handle = await open(lockPath, "wx", 0o600);
-  } catch (error) {
-    if (isNodeError(error) && error.code === "EEXIST") {
-      throw new AgentCargoInstallError(
-        "INSTALL_OPERATION_LOCKED",
-        `Another AgentCargo installation is active for this scope: ${parent}`,
-      );
-    }
-    throw error;
-  }
-  try {
-    await handle.chmod(0o600);
-  } catch (error) {
-    await handle.close().catch(() => undefined);
-    await unlink(lockPath).catch(() => undefined);
-    throw error;
-  }
-  return {
-    async release(): Promise<void> {
-      await handle.close();
-      await unlink(lockPath);
-    },
-  };
-}
-
-async function inventoryInstalledTree(
-  root: string,
-): Promise<{ files: InstalledFileRecord[]; filesDigest: string }> {
-  const files: InstalledFileRecord[] = [];
-
-  async function visit(directory: string, relativeDirectory: string): Promise<void> {
-    const entries = await readdir(directory, { withFileTypes: true });
-    entries.sort((left, right) => compareUtf8(left.name, right.name));
-    for (const entry of entries) {
-      const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
-      normalizeArtifactPath(relativePath);
-      const absolutePath = path.join(directory, entry.name);
-      const fileStat = await lstat(absolutePath);
-      if (fileStat.isSymbolicLink()) {
-        throw new AgentCargoInstallError(
-          "INSTALL_STAGED_LINK_UNSUPPORTED",
-          `Staged package contains a link: ${relativePath}`,
-        );
-      }
-      if (fileStat.isDirectory()) {
-        await visit(absolutePath, relativePath);
-        continue;
-      }
-      if (!fileStat.isFile()) {
-        throw new AgentCargoInstallError(
-          "INSTALL_STAGED_SPECIAL_FILE",
-          `Staged package contains a special file: ${relativePath}`,
-        );
-      }
-
-      const mode = canonicalInstalledMode(relativePath, fileStat.mode);
-      files.push({
-        path: relativePath,
-        digest: await hashRegularFile(absolutePath),
-        bytes: fileStat.size,
-        mode,
-      });
-    }
-  }
-
-  await visit(root, "");
-  files.sort((left, right) => compareUtf8(left.path, right.path));
-  const aggregate = createHash("sha256");
-  for (const file of files) {
-    aggregate.update(
-      JSON.stringify([file.path, file.digest, file.bytes, file.mode]),
-      "utf8",
-    );
-    aggregate.update("\n", "utf8");
-  }
-  return { files, filesDigest: `sha256:${aggregate.digest("hex")}` };
-}
-
-async function hashRegularFile(filePath: string): Promise<string> {
-  const hash = createHash("sha256");
-  const handle = await open(filePath, "r");
-  try {
-    const buffer = Buffer.allocUnsafe(STREAM_CHUNK_BYTES);
-    let position = 0;
-    while (true) {
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
-      if (bytesRead === 0) break;
-      hash.update(buffer.subarray(0, bytesRead));
-      position += bytesRead;
-    }
-  } finally {
-    await handle.close();
-  }
-  return `sha256:${hash.digest("hex")}`;
-}
-
-function canonicalInstalledMode(relativePath: string, sourceMode: number): number {
-  if (process.platform === "win32") return relativePath.startsWith("scripts/") ? 0o755 : 0o644;
-  return sourceMode & 0o111 ? 0o755 : 0o644;
-}
-
-function compareUtf8(left: string, right: string): number {
-  return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
 }
 
 function escapesRelativeRoot(relative: string): boolean {

@@ -252,7 +252,35 @@ Failure requirements:
 - Staging occurs on the same filesystem as the final destination so rename can be atomic.
 - Replacing an existing version first creates a recoverable backup or uses a rename sequence that permits rollback.
 - Lockfile writes use a temporary sibling file, flush, and atomic rename.
-- Interrupted operations are detected and recovered by `agentcargo doctor`.
+- Interrupted operations are reported by `agentcargo doctor`; Milestone 1 does not delete or repair them automatically.
+
+### 9.2.1 Inspection and removal transaction
+
+`agentcargo list` treats the lockfile and installed tree as untrusted. It constrains every recorded destination beneath the adapter's skill root, refuses to follow links, and recomputes each owned file's SHA-256 digest, byte count, and canonical mode. Installations are classified as `clean`, `modified`, `missing`, or `invalid`, with missing, modified, untracked, and invalid paths reported separately.
+
+Removal is serialized with installation by the scope's exclusive `.agentcargo-operation.lock`. The CLI requires `--yes` for every removal. Local drift additionally requires `--force`; force never permits linked or special paths and never expands ownership beyond the lockfile receipt.
+
+```mermaid
+sequenceDiagram
+    participant C as CLI
+    participant L as Lockfile
+    participant F as Filesystem
+
+    C->>L: Read and validate ownership receipt
+    C->>F: Inspect destination without following links
+    C->>F: Rename destination to removal stage
+    C->>F: Reinspect staged tree
+    C->>L: Atomically replace or remove lockfile
+    C->>F: Unlink only receipt-owned regular files
+    C->>F: Prune only empty owned directories
+    alt Untracked content remains
+        C->>F: Rename preserved content to original destination
+    else Stage is empty
+        C->>F: Remove empty stage
+    end
+```
+
+If lockfile commit fails, the staged directory is renamed back before the operation lock is released. If interruption occurs after lockfile commit, `doctor` reports the abandoned removal stage for manual inspection. This ordering favors protecting unmanaged content over automatic cleanup.
 
 ### 9.3 Safe extraction
 

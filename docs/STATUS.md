@@ -22,7 +22,7 @@ Skill name and description
     -> atomic activation + agentcargo.lock ownership receipt
 ```
 
-The next slice is local installation inspection and lifecycle management: `list`, modification-safe `remove`, and `doctor`.
+The local Milestone 1 vertical slice is complete through installation inspection, modification-safe removal, and diagnostics.
 
 ## Completed and verified
 
@@ -100,6 +100,9 @@ The next slice is local installation inspection and lifecycle management: `list`
 - [x] Added structured artifact errors to human-readable and JSON CLI output.
 - [x] Set a non-zero exit status for invalid skills and CLI errors.
 - [x] Added stable CLI error codes for implemented error paths.
+- [x] Implemented `agentcargo list` for project, user, or both scopes.
+- [x] Implemented `agentcargo remove` with required `--yes` confirmation and separate `--force` drift acknowledgement.
+- [x] Implemented read-only `agentcargo doctor` diagnostics for project, user, or both scopes.
 
 ### Host adapters and local installation
 
@@ -120,6 +123,23 @@ The next slice is local installation inspection and lifecycle management: `list`
 - [x] Keep local source filesystem paths out of the lockfile.
 - [x] Added separate platform-specific user lockfile locations beneath the user home.
 
+### Local lifecycle safety
+
+- [x] Recompute installed SHA-256, byte-count, and canonical-mode receipts without following links.
+- [x] Classify installations as clean, modified, missing, or invalid.
+- [x] Report missing, modified, untracked, and invalid paths separately.
+- [x] Constrain every lockfile destination beneath the adapter's validated skill root.
+- [x] Serialize install and removal with a shared metadata-bearing scope operation lock.
+- [x] Refuse normal removal when any local drift is present.
+- [x] Refuse linked, special, case-conflicting, or otherwise invalid content even under forced removal.
+- [x] Stage removal with atomic rename and reinspect before committing the lockfile.
+- [x] Roll back the destination if lockfile commit fails.
+- [x] Unlink only lockfile-owned regular files and prune only empty owned directories.
+- [x] Preserve untracked content at the original destination after forced removal.
+- [x] Atomically replace non-empty lockfiles and unlink an empty lockfile.
+- [x] Diagnose active/stale/invalid operation locks, abandoned install/removal stages, host-path failures, lockfile failures, and installation drift.
+- [x] Keep `doctor` read-only; it never automatically deletes recovery evidence.
+
 ### Examples and documentation
 
 - [x] Added `examples/hello-skill` with valid native and AgentCargo metadata.
@@ -127,6 +147,7 @@ The next slice is local installation inspection and lifecycle management: `list`
 - [x] Added the durable root `AGENTS.md` context file.
 - [x] Added this implementation-status tracker.
 - [x] Added the canonical artifact format architecture decision record.
+- [x] Added `docs/THREAT_MODEL.md` for local boundaries, hosted requirements, residual risks, and recovery limits.
 
 ## Verification evidence
 
@@ -134,7 +155,7 @@ Last full verification on 2026-08-13:
 
 ```text
 pnpm check   PASS
-pnpm test    PASS: 6 test files, 44 tests
+pnpm test    PASS: 7 test files, 58 tests
 pnpm build   PASS
 CLI init smoke test       PASS
 CLI validate smoke test   PASS
@@ -142,13 +163,16 @@ CLI pack smoke test       PASS with deterministic duplicate artifacts
 CLI pack error smoke test PASS with stable JSON error
 CLI local add smoke test  PASS with Codex project install and lockfile
 CLI repeated add test     PASS with stable INSTALL_ALREADY_RECORDED error
+CLI list smoke test       PASS with clean receipt recomputation
+CLI doctor smoke test     PASS with healthy host, lockfile, and installed tree
+CLI remove smoke test     PASS with destination removal and empty-lockfile unlink
 Example skill validation  PASS with no findings
 Canonical example digest  PASS: sha256:7642e1b5daefdde9f75eb6ec45cd22571fda276cff29bc13b9c14f5ce3e5db84
 Standard TAR inspection   PASS
 Whitespace scan and git diff --check PASS
 ```
 
-The install test matrix covers Codex project and user scopes, declared-scope enforcement, unmanaged destinations, symlink escapes, lockfile parsing and atomic replacement, per-file ownership, CLI output, and rollback after a forced lockfile-commit failure.
+The install and lifecycle test matrix covers Codex project and user scopes, declared-scope enforcement, unmanaged destinations, symlink escapes, lockfile parsing and atomic replacement, per-file ownership, drift classification, clean and forced removal, preservation of untracked content, invalid-link refusal, multiple lock entries, stale operation locks, abandoned staging paths, CLI confirmation, and rollback after a forced installation lockfile-commit failure.
 
 ## In progress
 
@@ -156,18 +180,15 @@ No implementation task is currently in progress.
 
 ## Next recommended slice
 
-### Inspect, remove, and diagnose local installations
+### Finish public-project decisions, then select the second host
 
-- [ ] Implement `agentcargo list` for project and user lockfiles.
-- [ ] Recompute installed file receipts and classify missing, modified, and untracked files.
-- [ ] Implement `agentcargo remove` with refusal on any local drift unless explicitly confirmed.
-- [ ] Remove only the destination and files recorded as AgentCargo-owned.
-- [ ] Update or remove empty lockfiles atomically.
-- [ ] Implement `agentcargo doctor` for stale operation locks, abandoned staging directories, invalid destinations, and host-path health.
-- [ ] Add interrupted-removal and local-modification fixtures.
-- [ ] Write the formal `docs/THREAT_MODEL.md` covering archive, adapter, installation, and lockfile boundaries.
+- [ ] Decide the initial open-source boundary and choose a license for the public CLI/core/adapters.
+- [ ] Record the monorepo, naming, and open-source-boundary architecture decisions.
+- [ ] Add contribution guidelines, code of conduct, security policy, and issue templates.
+- [ ] Compare candidate second hosts by demand, format stability, current official documentation, and automated testability.
+- [ ] Select the second host and document its verified skill contract before implementing its adapter.
 
-Exit condition: users can inspect both scopes, cleanly remove unchanged AgentCargo installations, and cannot accidentally delete modified or unmanaged content.
+Exit condition: the public collaboration boundary is explicit, the repository has baseline community/security documents, and the second host is selected from current evidence rather than assumption.
 
 ## Pending by milestone
 
@@ -180,10 +201,10 @@ Exit condition: users can inspect both scopes, cleanly remove unchanged AgentCar
 - [x] Atomic staged installation.
 - [x] `agentcargo.lock` schema and atomic writes.
 - [x] Local-path `agentcargo add`.
-- [ ] `agentcargo list`.
-- [ ] `agentcargo remove` with local-modification protection.
-- [ ] `agentcargo doctor`.
-- [ ] Formal `docs/THREAT_MODEL.md`.
+- [x] `agentcargo list`.
+- [x] `agentcargo remove` with local-modification protection.
+- [x] `agentcargo doctor`.
+- [x] Formal `docs/THREAT_MODEL.md`.
 - [x] Architecture decision record for the artifact format.
 - [ ] Architecture decision records for the monorepo, naming, and open-source boundary.
 
@@ -258,7 +279,7 @@ Exit condition: users can inspect both scopes, cleanly remove unchanged AgentCar
 - No open-source license has been selected or added yet.
 - The hosted registry may remain private-source even if CLI, schemas, adapters, and validation rules become open source; this boundary needs a formal decision.
 - Local creation, validation, deterministic packaging, hashing, safe extraction, and Codex installation exist. Remote installation, registry, authentication, and the website do not exist yet.
-- Local installation is add-only; `list`, `remove`, drift audit, update, rollback of successful historical versions, and `doctor` are not implemented yet.
+- Local installations can be listed, drift-inspected, safely removed, and diagnosed. Update, full audit, and rollback of successful historical versions are not implemented yet.
 - The second supported host has not been chosen.
 - Package size and file-count limits are initial engineering defaults and need product validation.
 - The canonical digest and installation assertions are wired into the existing OS/Node CI matrix, but remote CI has not run because the repository has not been pushed.

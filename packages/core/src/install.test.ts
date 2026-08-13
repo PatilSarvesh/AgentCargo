@@ -166,7 +166,7 @@ describe("installLocalSkill", () => {
       stat(path.join(projectRoot, ".agents", "skills", "rollback-skill")),
     ).rejects.toMatchObject({ code: "ENOENT" });
     expect(await readdir(path.join(projectRoot, ".agents", "skills"))).toEqual([]);
-    await expect(stat(path.join(projectRoot, ".agentcargo-install.lock"))).rejects.toMatchObject({
+    await expect(stat(path.join(projectRoot, ".agentcargo-operation.lock"))).rejects.toMatchObject({
       code: "ENOENT",
     });
   });

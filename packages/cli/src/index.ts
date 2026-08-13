@@ -11,14 +11,23 @@ import { AgentCargoAdapterError, type InstallScope } from "@agentcargo/adapter-c
 import { CodexAdapter } from "@agentcargo/adapter-codex";
 import {
   AgentCargoInstallError,
+  AgentCargoLifecycleError,
   AgentCargoLockfileError,
+  AgentCargoFilesystemError,
+  AgentCargoOperationLockError,
   createSkillTemplate,
+  doctorInstallations,
+  listInstallations,
   normalizeSkillName,
   installLocalSkill,
   packSkillDirectory,
+  removeInstallation,
   validateSkillDirectory,
   AgentCargoArtifactError,
+  type DoctorResult,
   type Finding,
+  type InstallationInspection,
+  type InstallationListResult,
 } from "@agentcargo/core";
 
 export const program = new Command();
@@ -152,6 +161,109 @@ program
   });
 
 program
+  .command("list")
+  .description("List managed skills and report local installation drift.")
+  .option("--agent <host>", "target AI agent", "codex")
+  .option("--scope <scope>", "installation scope: project, user, or all", "project")
+  .option("--project-root <path>", "project root for project scope", ".")
+  .option("--json", "print machine-readable output")
+  .action(async (options: ScopeOptions) => {
+    try {
+      const adapter = resolveAdapter(options.agent);
+      const scopes = parseScopes(options.scope);
+      const context = {
+        projectRoot: path.resolve(options.projectRoot),
+        userHome: homedir(),
+      };
+      const results = await Promise.all(
+        scopes.map((scope) => listInstallations({ adapter, scope, context })),
+      );
+      if (options.json) {
+        printJson({ ok: true, installations: results });
+      } else {
+        printInstallationLists(results);
+      }
+    } catch (error) {
+      handleError(error, options.json);
+    }
+  });
+
+program
+  .command("remove")
+  .description("Remove a managed skill without deleting untracked local files.")
+  .argument("<package>", "installed package name")
+  .requiredOption("--agent <host>", "target AI agent (currently: codex)")
+  .requiredOption("--scope <scope>", "installation scope: project or user")
+  .option("--project-root <path>", "project root for project scope", ".")
+  .option("--force", "allow removal when managed files are missing or modified")
+  .option("--yes", "confirm the destructive operation")
+  .option("--json", "print machine-readable output")
+  .action(async (packageName: string, options: RemoveOptions) => {
+    try {
+      if (!options.yes) {
+        throw new CliError(
+          "REMOVE_CONFIRMATION_REQUIRED",
+          "Removal requires explicit confirmation. Review agentcargo list, then repeat with --yes.",
+        );
+      }
+      const adapter = resolveAdapter(options.agent);
+      const scope = parseSingleScope(options.scope);
+      const result = await removeInstallation({
+        package: packageName,
+        adapter,
+        scope,
+        context: {
+          projectRoot: path.resolve(options.projectRoot),
+          userHome: homedir(),
+        },
+        force: options.force === true,
+      });
+      if (options.json) {
+        printJson({ ok: true, ...result });
+      } else {
+        console.log(`Removed ${result.package}@${result.version}`);
+        console.log(`Agent: ${result.agent} (${result.scope})`);
+        if (result.preservedUntracked) {
+          console.log(`Preserved unmanaged content at: ${result.destination}`);
+          for (const preserved of result.preservedPaths) console.log(`  ${preserved}`);
+        }
+        console.log(`Lockfile: ${result.lockfilePath}`);
+      }
+    } catch (error) {
+      handleError(error, options.json);
+    }
+  });
+
+program
+  .command("doctor")
+  .description("Diagnose host paths, lockfiles, drift, and interrupted operations.")
+  .option("--agent <host>", "target AI agent", "codex")
+  .option("--scope <scope>", "installation scope: project, user, or all", "all")
+  .option("--project-root <path>", "project root for project scope", ".")
+  .option("--json", "print machine-readable output")
+  .action(async (options: ScopeOptions) => {
+    try {
+      const adapter = resolveAdapter(options.agent);
+      const scopes = parseScopes(options.scope);
+      const context = {
+        projectRoot: path.resolve(options.projectRoot),
+        userHome: homedir(),
+      };
+      const results = await Promise.all(
+        scopes.map((scope) => doctorInstallations({ adapter, scope, context })),
+      );
+      if (options.json) {
+        printJson({ ok: results.every((result) => result.healthy), diagnostics: results });
+      } else {
+        printDoctorResults(results);
+      }
+      if (results.some((result) => !result.healthy)) process.exitCode = 1;
+    } catch (error) {
+      handleError(error, options.json);
+    }
+  });
+
+program
   .command("pack")
   .description("Create a deterministic, digest-addressed AgentCargo artifact.")
   .argument("[path]", "skill directory", ".")
@@ -193,6 +305,20 @@ interface AddOptions extends JsonOptions {
   agent: string;
   scope: InstallScope | string;
   projectRoot: string;
+}
+
+interface ScopeOptions extends JsonOptions {
+  agent: string;
+  scope: string;
+  projectRoot: string;
+}
+
+interface RemoveOptions extends JsonOptions {
+  agent: string;
+  scope: string;
+  projectRoot: string;
+  force?: boolean;
+  yes?: boolean;
 }
 
 class CliError extends Error {
@@ -243,6 +369,74 @@ function severityLabel(severity: Finding["severity"]): string {
   return "INFO ";
 }
 
+function printInstallationLists(results: InstallationListResult[]): void {
+  for (const [index, result] of results.entries()) {
+    if (index > 0) console.log("");
+    console.log(`${result.agent} ${result.scope} installations`);
+    console.log(`Lockfile: ${result.lockfilePath}`);
+    if (result.packages.length === 0) {
+      console.log("No managed skills.");
+      continue;
+    }
+    for (const installation of result.packages) printInstallation(installation);
+  }
+}
+
+function printInstallation(installation: InstallationInspection): void {
+  console.log(`${installation.package}@${installation.version}  ${installation.state.toUpperCase()}`);
+  console.log(`  ${installation.destination}`);
+  if (installation.missingFiles.length > 0) {
+    console.log(`  Missing: ${installation.missingFiles.join(", ")}`);
+  }
+  if (installation.modifiedFiles.length > 0) {
+    console.log(`  Modified: ${installation.modifiedFiles.join(", ")}`);
+  }
+  if (installation.untrackedPaths.length > 0) {
+    console.log(`  Untracked: ${installation.untrackedPaths.join(", ")}`);
+  }
+  for (const invalid of installation.invalidPaths) {
+    console.log(`  Invalid ${invalid.path}: ${invalid.reason}`);
+  }
+}
+
+function printDoctorResults(results: DoctorResult[]): void {
+  for (const [index, result] of results.entries()) {
+    if (index > 0) console.log("");
+    console.log(`${result.healthy ? "HEALTHY" : "ATTENTION"}: ${result.agent} ${result.scope}`);
+    if (result.findings.length === 0) {
+      console.log("No findings.");
+      continue;
+    }
+    for (const finding of result.findings) {
+      const location = finding.path ? ` ${finding.path}` : "";
+      console.log(`${finding.severity === "error" ? "ERROR" : "WARN "} ${finding.code}${location}`);
+      console.log(`  ${finding.message}`);
+    }
+  }
+}
+
+function resolveAdapter(agent: string): CodexAdapter {
+  if (agent !== "codex") {
+    throw new CliError(
+      "HOST_UNSUPPORTED",
+      `Host '${agent}' is not supported. The current adapter is 'codex'.`,
+    );
+  }
+  return new CodexAdapter();
+}
+
+function parseScopes(scope: string): InstallScope[] {
+  if (scope === "all") return ["project", "user"];
+  return [parseSingleScope(scope)];
+}
+
+function parseSingleScope(scope: string): InstallScope {
+  if (scope !== "project" && scope !== "user") {
+    throw new CliError("SCOPE_INVALID", "Installation scope must be 'project' or 'user'.");
+  }
+  return scope;
+}
+
 async function existingPaths(paths: string[]): Promise<string[]> {
   const results = await Promise.all(
     paths.map(async (candidate) => {
@@ -261,8 +455,11 @@ function handleError(error: unknown, json = false): void {
   const code =
     error instanceof CliError ||
     error instanceof AgentCargoArtifactError ||
+    error instanceof AgentCargoFilesystemError ||
     error instanceof AgentCargoInstallError ||
+    error instanceof AgentCargoLifecycleError ||
     error instanceof AgentCargoLockfileError ||
+    error instanceof AgentCargoOperationLockError ||
     error instanceof AgentCargoAdapterError
       ? error.code
       : "UNEXPECTED_ERROR";
