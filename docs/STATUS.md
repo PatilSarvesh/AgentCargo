@@ -226,6 +226,7 @@ Last full verification on 2026-08-19:
 ```text
 CI=true pnpm verify  PASS: all workspace TypeScript checks/builds, 23 test files and 193 tests passed, 1 opt-in live integration test skipped
 CI=true pnpm --filter @agentcargo/cli test  PASS: 19 tests, including explicit device-login success and CI-interactive denial fixtures
+pnpm --filter @agentcargo/registry-client test  PASS: 20 tests; POSIX permission assertions are scoped away from Windows, where Node does not expose Unix mode enforcement
 pnpm verify  PASS before the worker slice: type-check, build, 18 test files, 155 passing tests, 1 opt-in integration test skipped
 Direct publication-slice verification PASS: TypeScript checks for changed packages; 19 test files, 162 passing tests, 1 opt-in integration test skipped
 pnpm verify rerun        BLOCKED by unavailable registry DNS while pnpm recreated dependencies; no code/test failure was observed
@@ -439,7 +440,7 @@ Exit condition: an authenticated creator can publish a validated immutable relea
 - Local installations can be listed, audited, safely removed, diagnosed, compared with verified registry targets, atomically updated, and rolled back to the retained prior version. Audit reverifies host-ready receipts but labels source-artifact digests as recorded because source artifact bytes are intentionally not retained locally.
 - Claude Code has a local adapter and shared contract coverage. An authenticated live-host discovery smoke test remains optional and has not run in the current unauthenticated environment.
 - Package size and file-count limits are initial engineering defaults and need product validation.
-- The canonical digest and installation assertions are wired into the existing OS/Node CI matrix. Remote CI exposed an inherited-`CI` assumption in the device-login success fixture; the fixture now explicitly models non-CI login while retaining separate CI-denial coverage. The live registry harness passes locally.
+- The canonical digest and installation assertions are wired into the existing OS/Node CI matrix. Remote CI exposed an inherited-`CI` assumption in the device-login success fixture and Unix-mode assertions on Windows; the fixtures now explicitly model non-CI login, retain separate CI-denial coverage, and limit POSIX permission assertions to POSIX hosts. The live registry harness passes locally.
 
 ## Status update template
 

@@ -36,8 +36,10 @@ describe("file registry credential store", () => {
       expired: false,
     });
     const metadata = await lstat(filePath);
-    expect(metadata.mode & 0o777).toBe(0o600);
-    expect((await lstat(path.dirname(filePath))).mode & 0o777).toBe(0o700);
+    if (process.platform !== "win32") {
+      expect(metadata.mode & 0o777).toBe(0o600);
+      expect((await lstat(path.dirname(filePath))).mode & 0o777).toBe(0o700);
+    }
     expect(await readFile(filePath, "utf8")).toContain("gho_secret_value");
   });
 
@@ -73,7 +75,7 @@ describe("file registry credential store", () => {
     await expect(store.get("https://registry.example.test")).rejects.toMatchObject({ code: "AUTH_STORE_NOT_REGULAR_FILE" });
   });
 
-  it("does not silently accept a world-writable existing store", async () => {
+  it.skipIf(process.platform === "win32")("does not silently accept a world-writable existing store", async () => {
     const root = await temporaryDirectory();
     const filePath = path.join(root, "auth.json");
     await writeFile(filePath, JSON.stringify({ version: 1, credentials: {} }), { mode: 0o666 });
