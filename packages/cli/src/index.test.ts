@@ -251,6 +251,7 @@ describe("agentcargo auth commands", () => {
 
   it("acquires and stores a GitHub device credential without printing tokens", async () => {
     const root = await createTemporaryDirectory();
+    vi.stubEnv("CI", "false");
     vi.stubEnv("AGENTCARGO_CONFIG_DIR", root);
     vi.stubEnv("AGENTCARGO_GITHUB_CLIENT_ID", "Iv1.client");
     const fetch = vi.fn()
