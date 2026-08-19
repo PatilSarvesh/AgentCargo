@@ -31,6 +31,10 @@ export interface InstallLocalSkillInput {
   adapter: HostAdapter;
   scope: InstallScope;
   context: AdapterContext;
+  sourceType?: AgentCargoLockEntry["source"]["type"];
+  /** Stable lockfile identity; registry installs use @namespace/name. */
+  packageIdentity?: string;
+  expectedDigest?: string;
   userDataRoot?: string;
   now?: () => Date;
 }
@@ -82,6 +86,7 @@ export async function installLocalSkill(
       ? { compatibility: validation.manifest.compatibility }
       : {}),
   };
+  const packageIdentity = input.packageIdentity ?? adapterPackage.name;
   const adapterInput = {
     scope: input.scope,
     context: input.context,
@@ -110,6 +115,12 @@ export async function installLocalSkill(
 
   try {
     const packed = await packSkillDirectory(validation.root, artifactPath);
+    if (input.expectedDigest && packed.digest !== input.expectedDigest) {
+      throw new AgentCargoInstallError(
+        "INSTALL_ARTIFACT_DIGEST_MISMATCH",
+        `Repacked skill digest ${packed.digest} does not match the expected registry digest ${input.expectedDigest}.`,
+      );
+    }
     const lockfilePath = await resolveLockfilePath(input, plan);
     const operationRoot = path.dirname(lockfilePath);
     operationLock = await acquireOperationLock(operationRoot, "INSTALL_OPERATION_LOCKED");
@@ -119,12 +130,12 @@ export async function installLocalSkill(
       (entry) =>
         entry.agent === input.adapter.id &&
         entry.scope === input.scope &&
-        entry.package === adapterPackage.name,
+        entry.package === packageIdentity,
     );
     if (existingEntry) {
       throw new AgentCargoInstallError(
         "INSTALL_ALREADY_RECORDED",
-        `${adapterPackage.name} is already recorded for ${input.adapter.id} ${input.scope} scope.`,
+        `${packageIdentity} is already recorded for ${input.adapter.id} ${input.scope} scope.`,
       );
     }
 
@@ -152,7 +163,7 @@ export async function installLocalSkill(
 
     const installedAt = (input.now?.() ?? new Date()).toISOString();
     const entry: AgentCargoLockEntry = {
-      package: adapterPackage.name,
+      package: packageIdentity,
       version: adapterPackage.version,
       digest: packed.digest,
       agent: input.adapter.id,
@@ -162,7 +173,7 @@ export async function installLocalSkill(
       installed_at: installedAt,
       files_digest: inventory.filesDigest,
       files: inventory.files,
-      source: { type: "local" },
+      source: { type: input.sourceType ?? "local" },
     };
     const nextLockfile = {
       lockfile_version: 1 as const,
@@ -198,7 +209,7 @@ export async function installLocalSkill(
     }
 
     return {
-      package: adapterPackage.name,
+      package: packageIdentity,
       version: adapterPackage.version,
       digest: packed.digest,
       agent: input.adapter.id,

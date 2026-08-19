@@ -81,6 +81,9 @@ Describe the workflow the AI agent should follow.
       codex: {
         scopes: ["project", "user"],
       },
+      "claude-code": {
+        scopes: ["project", "user"],
+      },
     },
     capabilities: {
       filesystem: {
@@ -91,6 +94,7 @@ Describe the workflow the AI agent should follow.
       network: false,
       environment: [],
     },
+    dependencies: [],
     tags: [],
   };
 
@@ -392,6 +396,7 @@ async function validateAgentCargoManifest(
 
   const compatibility = validateCompatibility(value.compatibility, findings);
   const capabilities = validateCapabilities(value.capabilities, findings);
+  const dependencies = validateDependencies(value.dependencies, findings);
   const tags = validateStringArray(value.tags, "tags", findings);
 
   if (findings.some((item) => item.severity === "error" && item.path === "agentcargo.yaml")) {
@@ -411,9 +416,39 @@ async function validateAgentCargoManifest(
   if (repository) manifest.repository = repository;
   if (compatibility) manifest.compatibility = compatibility;
   if (capabilities) manifest.capabilities = capabilities;
+  if (dependencies) manifest.dependencies = dependencies;
   if (tags) manifest.tags = tags;
 
   return manifest;
+}
+
+function validateDependencies(
+  value: unknown,
+  findings: Finding[],
+): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (
+    !Array.isArray(value)
+    || value.length > 64
+    || value.some((entry) =>
+      typeof entry !== "string"
+      || entry.length === 0
+      || entry.length > 128
+      || /[\u0000-\u001f\u007f]/.test(entry)
+    )
+    || new Set(value).size !== value.length
+  ) {
+    findings.push(
+      finding(
+        "AGENTCARGO_DEPENDENCIES_INVALID",
+        "error",
+        "dependencies must be a unique array of at most 64 printable strings, each at most 128 characters.",
+        "agentcargo.yaml",
+      ),
+    );
+    return undefined;
+  }
+  return [...value];
 }
 
 function validateCompatibility(

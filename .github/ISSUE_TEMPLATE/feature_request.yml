@@ -1,0 +1,54 @@
+name: Feature proposal
+description: Propose a focused product, CLI, package-contract, or adapter change.
+title: "[Proposal]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user problem or unsupported workflow should AgentCargo address?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe observable behavior and acceptance criteria, not only an implementation.
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Primary surface
+      options:
+        - CLI or core
+        - Package format or validation
+        - Host adapter
+        - Registry or API
+        - Website
+        - Documentation or community
+    validations:
+      required: true
+  - type: textarea
+    id: trust
+    attributes:
+      label: Trust and compatibility impact
+      description: Note filesystem mutations, untrusted input, host-specific behavior, wire-format changes, or compatibility risks.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What can users do today, and why is it insufficient?
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I reviewed the MVP scope and current status.
+          required: true
+        - label: I searched existing issues and proposals.
+          required: true

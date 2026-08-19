@@ -35,7 +35,8 @@ flowchart LR
     Creator["Skill creator"] --> CLI["AgentCargo CLI"]
     Developer["Skill consumer"] --> CLI
     Developer --> Web["AgentCargo web app"]
-    CLI --> API["Registry API"]
+    CLI --> Client["Registry client"]
+    Client --> API["Registry API"]
     Web --> API
     API --> DB[("PostgreSQL")]
     API --> Store[("Artifact storage")]
@@ -58,13 +59,18 @@ agentcargo/
 │   └── worker/               # Validation, scanning, and maintenance jobs
 ├── packages/
 │   ├── cli/                  # Published `agentcargo` executable
-│   ├── core/                 # Coordinates, semver, manifests, lockfiles
+│   ├── core/                 # Coordinates, manifests, validation, scanner, lockfiles
 │   ├── archive/              # Deterministic packing and safe extraction
-│   ├── scanner/              # Static rules and findings model
 │   ├── adapter-contract/     # Stable host adapter interface
 │   ├── adapter-codex/        # Codex detection and install behavior
-│   ├── adapter-second-host/  # Added after host-contract validation
-│   ├── api-client/           # Generated or typed registry client
+│   ├── adapter-claude-code/  # Selected second-host adapter
+│   ├── registry-contract/    # Versioned public registry read models
+│   ├── registry-db/          # PostgreSQL-oriented repositories
+│   ├── registry-storage/     # Digest-addressed S3-compatible object boundary
+│   ├── registry-integration/ # Opt-in live registry test harness
+│   ├── registry-api/         # Fastify registry routes
+│   ├── registry-client/      # Typed anonymous registry client
+│   ├── registry-worker/      # Leased artifact validation and activation worker
 │   ├── db/                   # Schema, migrations, and repositories
 │   ├── config/               # Shared lint, TypeScript, and test config
 │   └── fixtures/             # Valid and malicious package fixtures
@@ -120,7 +126,9 @@ AgentCargo preserves native files. An adapter may add generated host metadata on
 
 The Codex adapter follows the official Codex skill model: a directory with a required `SKILL.md`, optional scripts, references, assets, and `agents/openai.yaml`. Project-scoped skills are installed under the repository's `.agents/skills` hierarchy and user-scoped skills under the user's `.agents/skills` directory. Because these are vendor-owned conventions, the adapter includes the documentation URL, a `2026-08-13` verification date, and compatibility tests. See the [official OpenAI documentation](https://learn.chatgpt.com/docs/build-skills).
 
-AgentCargo vendors host-ready files for both Codex scopes. The Codex adapter removes registry-only `agentcargo.yaml` from its staging directory before activation; the immutable source-artifact digest and installed-file receipts remain in `agentcargo.lock`.
+AgentCargo vendors host-ready files for both selected hosts and both scopes. Each adapter removes registry-only `agentcargo.yaml` from its staging directory before activation; the immutable source-artifact digest and installed-file receipts remain in `agentcargo.lock`.
+
+Claude Code is the selected second host, implemented by `@agentcargo/adapter-claude-code` version `0.1.0`. Its dedicated project and user skill roots are `<project-root>/.claude/skills` and `<user-home>/.claude/skills`. AgentCargo installs the same portable source skill without generating Claude-specific extensions and removes only the registry-only `agentcargo.yaml` from staging. The dated comparison and decision are in [ADR 0005](adr/0005-second-host-selection.md); the verified filesystem, compatibility, trust, and test contract is in [the Claude Code host contract](hosts/claude-code.md).
 
 ### 7.2 Package identity
 
@@ -151,6 +159,7 @@ The `agentcargo.yaml` parser must:
 - Reject unknown schema versions.
 - Report unknown fields as warnings before schema stability, then reject them in strict mode.
 - Preserve no YAML object prototypes or custom tags.
+- Treat `dependencies` as bounded descriptive runtime requirements; the MVP previews changes but does not resolve or install them.
 - Limit aliases, nesting depth, scalar length, and total bytes.
 - Normalize package names and reject ambiguous Unicode.
 - Validate URLs and require HTTPS for remote references.
@@ -179,6 +188,8 @@ The digest is SHA-256 over the exact stored archive bytes. The same inputs must 
 ## 8. Host adapter contract
 
 Host behavior must never be implemented in generic install commands. Every host implements a versioned adapter interface similar to:
+
+The implementation and review checklist for first-party and third-party adapters is maintained in [the host adapter development guide](ADAPTERS.md).
 
 ```ts
 interface HostAdapter {
@@ -260,6 +271,12 @@ Failure requirements:
 
 Removal is serialized with installation by the scope's exclusive `.agentcargo-operation.lock`. The CLI requires `--yes` for every removal. Local drift additionally requires `--force`; force never permits linked or special paths and never expands ownership beyond the lockfile receipt.
 
+Update preview is read-only. The core validates and deterministically packs the target, verifies an expected registry digest when present, extracts it into temporary storage, applies the selected adapter's staging transformation, and compares that host-ready inventory with the installed lockfile receipt. Declared capability and descriptive dependency changes remain separate from versioned scanner-finding changes. Registry lock entries use `@namespace/name` identity so the CLI can retrieve both installed and target release metadata without embedding registry URLs or credentials in the lockfile.
+
+Applying an update holds the same scope operation lock used by installation and removal. The current receipt is reinspected immediately before mutation and must be clean. The verified target is staged beneath the host skills root, the active directory is renamed to a unique retained backup, and the staged directory is atomically renamed into place. AgentCargo then atomically replaces lockfile v1 and writes a size-limited, schema-validated `.agentcargo-rollback.json` sidecar containing the previous and current receipts plus the contained backup path. A failure while committing either metadata boundary restores the old directory and lockfile. A later rollback validates both the active and backup receipts, swaps them with same-filesystem renames, atomically restores the previous lock entry, and reverses the rollback record so the rollback itself can be undone. No package script is executed in any phase.
+
+`agentcargo audit` is read-only. It recomputes host-ready file receipts without following links, reports missing, modified, untracked, and invalid paths separately, inspects operation/rollback recovery evidence, and runs the versioned static scanner directly over a safely inventoried installed tree without requiring the registry-only manifest. The report labels the immutable source artifact digest as recorded rather than locally reverified because canonical source artifact bytes are not retained after installation; installed receipt integrity is independently classified as verified, mismatched, or unavailable. Every drift, integrity, path, recovery, and scanner observation includes an actionable remediation.
+
 ```mermaid
 sequenceDiagram
     participant C as CLI
@@ -329,17 +346,38 @@ The lockfile contains portable relative destinations, never contains credentials
 
 ## 10. Registry services
 
+The versioned public read models, authentication-session contract, and immutable release invariants live in [`@agentcargo/registry-contract`](../packages/registry-contract/src/index.ts). Its checked-in [OpenAPI 3.1 document](../packages/registry-contract/openapi/registry-v1.json) and runtime validators cover the initial anonymous read operations, provider-to-registry session response, and gated release-reservation request/response. The package is deliberately independent of HTTP, PostgreSQL, object storage, authentication providers, and CLI presentation. The boundary and exact lookup semantics are recorded in [ADR 0006](adr/0006-registry-read-path-contract.md).
+
+The first implementation is split into [`@agentcargo/registry-contract`](../packages/registry-contract/src/index.ts), [`@agentcargo/registry-client`](../packages/registry-client/src/index.ts), [`@agentcargo/registry-db`](../packages/registry-db/src/index.ts), [`@agentcargo/registry-storage`](../packages/registry-storage/src/index.ts), [`@agentcargo/registry-api`](../packages/registry-api/src/index.ts), and [`@agentcargo/registry-worker`](../packages/registry-worker/src/index.ts). The contract package owns the versioned public models and validators. The client owns HTTP URL construction, response validation, stable transport errors, anonymous search/package/release lookups, the local credential-store boundary, GitHub PKCE callback flow, and provider identity verification. The database package owns a small `pg`-compatible client surface, parameterized release/package/search queries, public-status filtering, row validation, request-scoped artifact URL creation, release reservations, upload intents, completion metadata, durable scan jobs, and the PostgreSQL session/state-store boundaries. The storage package owns digest verification, content-addressed object keys, immutable writes, signed-download delegation, and signed-upload delegation to an S3-compatible object store. The API package owns Fastify route parsing, response validation, stable error envelopes, cache headers, anonymous read routes, hosted GitHub start/callback/session routes, bearer/cookie publisher resolvers, release reservation, signed upload URL issuance, and upload completion into the scanning state. The worker package claims leased jobs, safely verifies and extracts artifacts into an isolated temporary directory, reuses core validation and static scanning, and calls activation only for matching valid packages; it never executes package files. Authentication and namespace authorization are injected as publisher-context resolvers; provider verification remains in the client adapter and session adapters issue short-lived opaque tokens while retaining only their hashes. The API does not validate GitHub OAuth tokens, own provider sessions, or expose SQL rows/database errors directly.
+
+The CLI credential handoff uses [`FileRegistryCredentialStore`](../packages/registry-client/src/auth-store.ts) for explicit registry keys and [`GitHubOAuthClient`](../packages/registry-client/src/github-oauth.ts) for provider communication. The client supports PKCE authorization-request construction, GitHub device authorization, authorization-code exchange for a hosted callback, identity revalidation through `/user`, and refresh-token rotation when GitHub returns expiring credentials. `GitHubHostedOAuthFlow` binds authorization start and callback completion to one-time redirect-bound state, while `GitHubPublisherTokenVerifier` maps GitHub `/user` checks to the API's injected verifier shape. The store validates credentials, writes them atomically with `0700` parent-directory and `0600` file permissions, supports status/login/refresh/logout without printing access tokens, and never writes credentials to `agentcargo.lock`. The API's generic bearer resolver is separately composable with a GitHub verifier or hosted session verifier, and its `/v1/auth/github/start`, `/v1/auth/github/callback`, and `/v1/auth/github/session` routes perform no-store redirects/session exchange. Registry sessions carry a bounded `publisher:read`/`publisher:write` claim set; the scoped cookie resolver and mutation routes enforce `publisher:write` without exposing provider credentials. The API can use the in-memory adapter for local/demo runs or `PostgresRegistrySessionStore` for durable hash-only sessions; `PostgresRegistryOAuthStateStore` provides durable one-time callback state. Upload URL issuance and completion use the `RegistryReleaseUploadRepository` boundary plus an injected artifact-storage adapter; completion records immutable metadata and returns `scanning` without exposing a public release until worker activation. Migration `0006_registry_scan_jobs.sql` adds a durable queue with leases, retries, and scan/rejection evidence, while `0007_registry_session_scopes.sql` persists bounded session claims. The CLI's authenticated local `publish` command now composes reservation, signed upload, and completion through this boundary; web-app session composition, scope selection, and publisher UI remain follow-up work.
+
 ### 10.1 Web application
 
 Responsibilities:
 
 - Server-rendered public search and package pages.
+- Local-only instruction-skill builder that generates reviewable `SKILL.md` and `agentcargo.yaml` drafts plus a CLI handoff; it never uploads files or installs them directly.
+- Read-only publisher workspace shell with an identity-header sign-in gate and local package summaries; identity headers alone never grant namespace authorization or registry mutation rights.
+- Fail-closed `/api/registry-session` status route that reports anonymous or identity-only state, sanitized opaque-session status, and the planned `publisher:read` scope without accepting browser credentials or returning registry tokens.
+- Server-only registry session bridge contract with an injected provider-credential resolver and read-scope exchange; the local default is intentionally unset.
 - GitHub sign-in and publisher settings.
 - Namespace and package management.
 - Scan-result presentation.
 - Reporting and maintainer moderation UI.
 
 It does not contain registry business rules that the CLI also needs; those live in API/core packages.
+
+The web session bridge in `app/registry-session.ts` accepts a host-owned,
+request-scoped provider resolver and an exchange function. It requests only
+`publisher:read`, validates the returned short-lived session, and the route
+stores only the opaque AgentCargo token in an HttpOnly cookie. When a host also
+provides a server-side session resolver, `GET /api/registry-session` validates
+that cookie and exposes only active/invalid/unavailable metadata; malformed,
+expired, duplicate, or over-scoped cookies fail closed. `DELETE
+/api/registry-session` clears the cookie without requiring provider credentials.
+The checked-in local configuration leaves the bridge unset; workspace identity
+headers are never promoted to provider credentials.
 
 ### 10.2 API
 
@@ -352,6 +390,8 @@ Responsibilities:
 - Signed, short-lived artifact download URLs.
 - Reports, quarantine, and audit events.
 - Idempotency enforcement for publishing operations.
+
+The initial routes are implemented in `@agentcargo/registry-api` and use the `@agentcargo/registry-db` repository interface. `GET /v1/auth/github/start` begins a configured PKCE flow, `GET /v1/auth/github/callback` completes one-time state, exchanges the provider credential, and sets a Secure/HttpOnly session cookie, and `POST /v1/auth/github/session` exchanges a provider-verified GitHub bearer credential for a short-lived opaque AgentCargo session; all three auth responses are `Cache-Control: no-store`. The callback can be backed by the PostgreSQL session/state stores after applying migrations `0003_registry_auth_sessions.sql` and `0004_registry_oauth_state.sql`. `GET /v1/search`, `GET /v1/packages/:namespace/:name`, and `GET /v1/packages/:namespace/:name/versions/:version` provide anonymous reads. The exact release route returns only active or deprecated releases; quarantine filtering remains a repository/API boundary concern. The gated `POST /v1/packages/:namespace/:name/releases` route validates a publisher context and reservation request; `POST /v1/releases/:releaseId/upload-url` creates a digest-bound signed upload URL, and `POST /v1/releases/:releaseId/complete` verifies the immutable object metadata and records completion in `scanning` state. Applying migrations `0005_registry_release_uploads.sql` and `0006_registry_scan_jobs.sql` supplies durable upload intent, completion metadata, and the worker queue. The local web app's `/api/registry-session` route is intentionally separate: it exposes only sanitized identity/session status, rejects browser-supplied provider credentials, and its checked-in configuration returns `501` until a request-scoped server provider resolver is composed.
 
 Suggested route groups:
 
@@ -386,7 +426,13 @@ The worker performs:
 - Scheduled cleanup of abandoned uploads.
 - Periodic rescan after scanner-rule updates.
 
-The worker uses no credentials available to uploaded code and never executes package files.
+The `@agentcargo/registry-worker` implementation claims one job at a time through
+`PostgresRegistryScanJobRepository`, using short leases and `FOR UPDATE SKIP LOCKED`.
+It downloads bytes through an injected artifact fetcher, verifies the reserved digest,
+extracts only canonical regular files, compares the extracted manifest and file inventory
+with the publisher completion metadata, and persists either bounded rejection evidence or
+an active release candidate through `PostgresRegistryReleaseScanRepository`. The worker
+uses no credentials available to uploaded code and never executes package files.
 
 ## 11. Publication state machine
 
@@ -654,7 +700,7 @@ Development uses local PostgreSQL and an S3-compatible emulator or filesystem-ba
 - Windows latest supported release.
 - Supported Node.js LTS versions.
 - Codex project and user scopes.
-- Second host project and user scopes if supported by that host.
+- Claude Code project and user scopes.
 
 ## 19. Key architecture decisions
 
@@ -666,10 +712,11 @@ Development uses local PostgreSQL and an S3-compatible emulator or filesystem-ba
 6. **PostgreSQL search and queue initially.** Avoid Elasticsearch and Redis until measured load requires them.
 7. **Evidence instead of composite scores.** Findings remain explainable, versioned, and reviewable.
 8. **Vendor project skills in MVP.** AgentCargo installs real directories instead of symlinks or central-cache pointers so host discovery and filesystem ownership are explicit across operating systems.
+9. **Apache-licensed public contracts.** Trust-critical client code and contracts remain open while hosted implementations may be separately deployed; see [ADR 0004](adr/0004-open-source-boundary-and-license.md).
+10. **Claude Code second.** Claude Code is the second MVP host because its current adoption, standard-based skill contract, distinct project/user paths, and deterministic test surface best exercise the adapter abstraction; see [ADR 0005](adr/0005-second-host-selection.md).
 
 ## 20. Architecture questions to resolve during implementation
 
-- The second host and its verified destination/metadata contract.
 - GitHub OAuth device flow versus browser callback with a one-time CLI code.
 - Maximum artifact, file, and expanded archive sizes.
 - Registry domain, package namespace policy, and CLI npm package availability.

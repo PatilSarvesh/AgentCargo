@@ -30,7 +30,7 @@ AgentCargo manages skills; it does not execute the skill workflow. The target AI
 - Registry metadata file: `agentcargo.yaml`.
 - Installation lockfile: `agentcargo.lock` (schema version 1).
 - Package coordinate format: `@namespace/name@version`.
-- The local repository directory is still named `SkillHub`; do not treat that folder name as the product name.
+- Local checkout directory names have no product meaning. The active repository directory is `AgentCargo`; historical `SkillHub` paths may still exist elsewhere.
 - AgentCargo passed a preliminary collision search, but domain, package-registry, trademark, and legal clearance have not been completed.
 
 ## Target users
@@ -50,7 +50,7 @@ The MVP includes:
 - Curated starter skills available in the catalog but not automatically installed.
 - Immutable semantic versions and SHA-256 artifact verification.
 - Project and user installation scopes.
-- Codex support first, followed by one verified second host.
+- Codex support first, followed by Claude Code as the selected second host.
 - Static validation and explainable findings.
 - Basic reporting, quarantine, and digest-denylist support.
 
@@ -79,7 +79,7 @@ Login is required to:
 
 - Publish or update a skill.
 - Manage namespaces and publisher profiles.
-- Use the browser skill builder to publish.
+- Publish a browser-builder draft through an authenticated registry workflow.
 - Submit authenticated reports with higher limits.
 
 GitHub OAuth is the planned initial identity provider. Repository access is not part of MVP authentication.
@@ -126,43 +126,72 @@ The native Agent Skills constraints currently enforced include:
 - Optional compatibility text of at most 500 characters.
 - String-to-string optional metadata.
 
-The source standard is <https://agentskills.io/specification>. Codex-specific conventions must be rechecked against official OpenAI documentation before changing its adapter.
+The source standard is <https://agentskills.io/specification>. Host-specific conventions must be rechecked against current first-party documentation before changing an adapter.
 
 ## Architecture decisions
 
 - TypeScript monorepo managed with pnpm.
+- Public repository contents use Apache License 2.0; trust-critical contracts, CLI/core, adapters, validation/scanner rules, and public API contracts remain open.
 - Modular monolith for the hosted MVP, not microservices.
 - Planned web application: Next.js.
 - Planned REST API: Fastify with OpenAPI 3.1.
 - PostgreSQL for registry data, initial search, audit history, and the durable job queue.
 - S3-compatible object storage for immutable package artifacts.
 - Shared core libraries between CLI, API, and worker.
+- PostgreSQL scan jobs use short leases, `FOR UPDATE SKIP LOCKED` claims, attempt tracking, retry timestamps, and immutable release activation only after shared validation and static scanning.
 - Host-specific behavior isolated behind versioned adapters.
 - Static scanning only in MVP; community files are never executed by registry workers.
 - Published artifacts are mirrored, immutable, content-addressed, and digest-verified.
 - Artifact format v1 is the uncompressed canonical USTAR format `agentcargo-ustar-v1`, stored with the `.agentcargo` extension and hashed over its exact bytes.
 - Host behavior lives behind `@agentcargo/adapter-contract`; the first adapter is `@agentcargo/adapter-codex` version `0.1.0`.
 - Codex project skills install to `<project-root>/.agents/skills/<name>` and user skills to `<user-home>/.agents/skills/<name>`, verified against official OpenAI documentation on 2026-08-13.
+- Claude Code is the selected second host. Its adapter ID is `claude-code` and package is `@agentcargo/adapter-claude-code` version `0.1.0`; project skills install to `<project-root>/.claude/skills/<name>` and user skills to `<user-home>/.claude/skills/<name>`, verified against official Anthropic documentation on 2026-08-13.
 - Project lockfiles live at `<project-root>/agentcargo.lock`; user lockfiles live in AgentCargo's platform-specific data directory beneath the user home.
 - Local installations vendor host-ready files, omit registry-only `agentcargo.yaml`, and record the artifact plus every installed file in lockfile v1.
 - Lifecycle inspection recomputes lockfile-owned receipts and classifies installations as clean, modified, missing, or invalid without following links.
 - Removal requires explicit confirmation, refuses drift unless forced, always rejects invalid path types, and preserves untracked content while deleting only receipt-owned files.
 - Scope mutations share `.agentcargo-operation.lock`; `agentcargo doctor` reports stale locks and abandoned staging paths without automatically deleting them.
 - No transitive skill dependency resolver in MVP.
+- Manifest `dependencies` are bounded, descriptive runtime requirements only; AgentCargo displays their changes but does not resolve or install them.
+- Registry installations record the scoped `@namespace/name` identity in lockfile v1 while adapters continue to receive the unscoped skill name for destination resolution.
+- Update previews deterministically pack, digest-verify, extract, and adapter-prepare the target into temporary storage, then compare host-ready file receipts plus declared capabilities/dependencies and versioned scanner findings without mutating the installation or lockfile.
+- Updates and rollbacks share the scope operation lock, require clean receipt-owned trees, stage on the destination filesystem, use atomic directory swaps, and restore the prior directory plus lockfile after commit failures.
+- Successful updates retain one validated rollback receipt and backup per package in `.agentcargo-rollback.json`; rollback swaps the retained and active versions so the operation is itself reversible, and removal cleans both active and retained owned files.
+- Local audit keeps artifact identity, installed receipt integrity, filesystem drift/path safety, recovery evidence, and versioned static scanner observations separate; it never claims to reverify source-artifact bytes that are not retained locally and never follows or executes installed content.
+- Publishing API boundaries receive authenticated, namespace-authorized publisher context from injected middleware. The API exposes generic bearer/cookie resolver boundaries, provider-to-registry session exchange, hosted GitHub start/callback routes, signed artifact-upload URL issuance, and upload completion into the scanning state; it does not validate GitHub OAuth tokens or own provider sessions. Release-version reservation and upload state are publisher-scoped, idempotent, and durably persisted; worker validation and public activation remain separate steps.
+- CLI credentials use a canonical registry URL key and a permission-restricted atomic local store; tokens never enter lockfiles, command arguments, or command output. `GitHubOAuthClient` supports PKCE authorization requests, device-flow login, identity revalidation, and refresh-token rotation. `GitHubHostedOAuthFlow` composes PKCE code exchange with one-time redirect-bound state, and `GitHubPublisherTokenVerifier` adapts `/user` identity checks to the API boundary. In-memory and PostgreSQL session/state adapters retain only bounded opaque session digests and transient callback material. Registry sessions carry bounded `publisher:read`/`publisher:write` claims, and scoped mutation resolvers reject sessions without publisher-write access. The local web app exposes a fail-closed `/api/registry-session` status boundary, an injected server-only resolver/exchange seam, server-only opaque-cookie inspection, and explicit cookie revocation; its default bridge remains unset, accepts no browser provider credentials, and returns no registry token until a real host resolver is composed. OS keychain integration and deployment wiring remain pending.
+- Authenticated local `agentcargo publish` composes validated deterministic packing, publisher-scoped reservation, signed artifact upload, completion, and token-redacted status output; browser publication and publisher UI remain pending.
+- The anonymous web catalog includes a local-only instruction-skill builder that generates reviewable `SKILL.md` and `agentcargo.yaml` drafts plus a CLI handoff; browser pages never upload package files or install them directly.
+- The local `/publisher` workspace is read-only and uses optional workspace identity headers only for display; identity alone never grants namespace authorization, and authenticated browser publication remains a follow-up boundary.
 
 ## Current repository structure
 
 ```text
-packages/core/       Validation, artifacts, installation transactions, and lockfiles
+apps/web/            Sites/Vinext public registry catalog UI
+packages/core/       Validation, static scanning, artifacts, installation transactions, and lockfiles
 packages/adapter-contract/ Versioned host adapter types
 packages/adapter-codex/    Codex project/user installation behavior
+packages/adapter-claude-code/ Claude Code project/user installation behavior
+packages/registry-contract/ Versioned public registry read models and invariants
+packages/registry-client/   Typed registry HTTP client, credential store, and GitHub OAuth adapter
+packages/registry-db/       PostgreSQL-oriented release, namespace, and session repository boundaries
+packages/registry-storage/  Digest-addressed S3-compatible artifact storage boundary
+packages/registry-integration/ Opt-in live PostgreSQL/object-store test harness and CI adapter
+packages/registry-api/      Fastify registry read and publishing routes
+packages/registry-worker/   Durable scan-job worker, safe artifact verification, static scanning, and activation boundary
 packages/cli/        agentcargo command-line entry point
 examples/            Valid example skill fixtures
+docs/adr/            Accepted architecture decisions
+docs/hosts/          Verified host contracts and provenance
+docs/ADAPTERS.md     Third-party adapter development guide
 docs/PRD.md          Product requirements and scope
 docs/ARCHITECTURE.md Technical architecture and security boundaries
 docs/ROADMAP.md      Milestone sequence
 docs/THREAT_MODEL.md Local and planned hosted security boundaries
 docs/STATUS.md       Current implementation status and next work
+CONTRIBUTING.md      Contribution workflow and change requirements
+SECURITY.md          Private vulnerability-reporting policy
+LICENSE              Apache License 2.0 terms
 ```
 
 ## Implemented commands
@@ -170,14 +199,25 @@ docs/STATUS.md       Current implementation status and next work
 ```text
 agentcargo init [path]
 agentcargo validate [path]
+agentcargo scan [path]
 agentcargo pack [path]
-agentcargo add <local-path> --agent codex --scope <project|user>
-agentcargo list --agent codex --scope <project|user|all>
-agentcargo remove <package> --agent codex --scope <project|user> --yes
-agentcargo doctor --agent codex --scope <project|user|all>
+agentcargo publish [path] --namespace <namespace> [--registry <url>]
+agentcargo add <local-path>|<@namespace/name[@version]> --agent <codex|claude-code> --scope <project|user>
+agentcargo list --agent <codex|claude-code> --scope <project|user|all>
+agentcargo remove <package> --agent <codex|claude-code> --scope <project|user> --yes
+agentcargo doctor --agent <codex|claude-code> --scope <project|user|all>
+agentcargo search <query> [--registry <url>]
+agentcargo inspect <@namespace/name[@version]> [--registry <url>]
+agentcargo update [@namespace/name[@version]] --agent <codex|claude-code> --scope <project|user> [--dry-run|--yes] [--registry <url>]
+agentcargo rollback <package> --agent <codex|claude-code> --scope <project|user> --yes
+agentcargo audit --agent <codex|claude-code> --scope <project|user|all>
+agentcargo auth status [--registry <url>]
+agentcargo auth login [--registry <url>] [--client-id <id>]
+agentcargo auth refresh [--registry <url>] [--client-id <id>]
+agentcargo auth logout [--registry <url>]
 ```
 
-These commands support the current local workflow and machine-readable `--json` output. Remote registry installation and the other commands documented in the PRD are proposals until listed as completed in `docs/STATUS.md`.
+These commands support the current local workflow, versioned static observations, anonymous registry reads, digest-verified public registry installation, GitHub device-flow auth login/refresh, and authenticated local publication with machine-readable `--json` output. Set `AGENTCARGO_REGISTRY_URL` instead of passing `--registry`; hosted publisher UI and the other commands documented in the PRD remain proposals until listed as completed in `docs/STATUS.md`.
 
 ## Development commands
 
@@ -188,11 +228,13 @@ pnpm test
 pnpm build
 pnpm verify
 pnpm dev:cli validate ./examples/hello-skill
+pnpm dev:cli scan ./examples/hello-skill
 pnpm dev:cli pack ./examples/hello-skill
 pnpm dev:cli add ./examples/hello-skill --agent codex --scope project --project-root <test-project>
 pnpm dev:cli list --agent codex --scope project --project-root <test-project>
 pnpm dev:cli doctor --agent codex --scope project --project-root <test-project>
 pnpm dev:cli remove hello-skill --agent codex --scope project --project-root <test-project> --yes
+# The same local lifecycle is supported with --agent claude-code.
 ```
 
 Node.js 22 or newer and pnpm 11 are required. pnpm dependency build scripts are deny-by-default; only explicitly reviewed packages may be enabled in `pnpm-workspace.yaml`.

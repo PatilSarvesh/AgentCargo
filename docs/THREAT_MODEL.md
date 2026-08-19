@@ -1,8 +1,8 @@
 # AgentCargo Threat Model
 
-- Status: Initial Milestone 1 model
-- Last reviewed: 2026-08-13
-- Scope: local skill validation, canonical artifacts, Codex installation, lockfiles, inspection, removal, and diagnostics
+- Status: Initial hosted-auth handoff model
+- Last reviewed: 2026-08-15
+- Scope: local skill validation, canonical artifacts, Codex/Claude Code installation, lockfiles, inspection, update, rollback, audit, removal, and diagnostics
 
 ## 1. Security goal
 
@@ -64,6 +64,7 @@ The local implementation is designed around these invariants:
 10. Forced removal still refuses linked, special, or invalid paths, unlinks only lockfile-owned file paths, and preserves untracked content.
 11. Concurrent AgentCargo mutations in one scope are serialized by an exclusive operation lock.
 12. Interrupted staging and stale locks are reported by `agentcargo doctor`; they are not deleted automatically.
+13. Update, rollback, and audit never execute installed scripts; invalid installed paths are never followed.
 
 ## 6. Threats and controls
 
@@ -136,7 +137,7 @@ Residual risk:
 
 - Power loss and filesystem implementations can have durability semantics beyond Node's portable guarantees.
 - A same-user adversary can attempt races outside AgentCargo's operation lock.
-- Successful historical update and rollback are not implemented yet.
+- A process or power loss between separate directory, lockfile, and rollback-sidecar commits can require manual inspection even though caught in-process failures are restored and recovery evidence is retained.
 
 ### 6.5 Lockfile tampering
 
@@ -153,7 +154,7 @@ Implemented controls:
 Residual risk:
 
 - The lockfile is local user-controlled state, not a cryptographic authorization token.
-- A user can intentionally edit receipts and accept the consequences; future audit can compare registry metadata when online.
+- A user can intentionally edit receipts and accept the consequences. Local audit verifies host-ready receipt integrity; online registry comparison remains a future extension.
 
 ### 6.6 Drift-aware removal
 
@@ -175,7 +176,28 @@ Residual risk:
 - Cleanup interrupted after lockfile commit can leave an abandoned removal directory. `doctor` reports it for manual inspection.
 - Automatic recovery is deliberately deferred until recovery choices and evidence retention are designed.
 
-### 6.7 Skill instructions and host execution
+### 6.7 Update, rollback, and local audit
+
+Threats include overwriting local modifications, accepting substituted update bytes, escaping the host root through retained backup metadata, losing the prior version after a metadata failure, following linked audit paths, or presenting recorded artifact identity as newly verified evidence.
+
+Implemented controls:
+
+- Registry update targets are downloaded and safely extracted with the immutable release digest, then deterministically repacked and digest-checked again in core before mutation.
+- Update and rollback require clean active receipts and validate retained backup receipts before replacement.
+- Both operations share the scope mutation lock, stage beneath the destination filesystem, and use atomic directory renames.
+- Caught lockfile or rollback-state commit failures restore the prior active directory and lockfile; focused tests inject failures after activation.
+- `.agentcargo-rollback.json` is size-limited, exact-schema, regular-file-only, written with mode `0600`, and stores contained portable backup paths plus validated previous/current lock entries.
+- Rollback reverses the retained/current receipts, so a successful rollback remains reversible. Removal deletes retained content only through its verified receipt.
+- Audit recomputes installed receipts without following links, scans only safely inventoried regular files, and skips static scanning when a destination is missing or invalid.
+- Audit labels the source artifact digest as recorded because canonical artifact bytes are not retained locally; it reports installed receipt verification independently.
+
+Residual risk:
+
+- The filesystem cannot provide a portable multi-file transaction across the active directory, lockfile, and rollback sidecar. Abrupt termination can leave evidence that `doctor`/`audit` report for manual reconciliation.
+- Local static rules are observations, not proof that host execution will be safe.
+- A same-user process can race filesystem state outside the cooperative operation lock.
+
+### 6.8 Skill instructions and host execution
 
 Threats include prompt injection, destructive shell commands, credential access, network exfiltration, misleading capability declarations, and instructions that weaken host protections.
 
@@ -205,6 +227,25 @@ These controls are required before the corresponding hosted surfaces launch:
 - Append-only security and moderation audit events without tokens or package contents.
 - Quarantine and denylist propagation with documented timing.
 
+Implemented auth-handoff controls:
+
+- Registry credentials are keyed by a canonical HTTP(S) registry URL and validated as GitHub bearer credentials before storage.
+- The local file backend creates a `0700` parent directory, writes credentials with `0600` permissions, and replaces the file atomically.
+- `GitHubOAuthClient` uses PKCE for hosted authorization requests, supports GitHub device authorization for the CLI, revalidates `/user` identity after acquisition/refresh, and preserves rotated refresh-token metadata without printing token values.
+- `agentcargo auth status` reports provider, expiry, and refresh availability only; `agentcargo auth login`, `agentcargo auth refresh`, and `agentcargo auth logout` never accept access/refresh tokens as command-line arguments or print them, and tokens are never written to lockfiles.
+- The registry API's bearer boundary rejects malformed schemes, delegates credential verification to an injected provider/session adapter, and maps verifier failures to a generic unavailable error without returning provider details.
+- The initial hosted session boundary exchanges a provider-verified bearer credential for a short-lived random opaque token, retains only its SHA-256 digest in memory, bounds its lifetime, supports revocation, and marks the session response `Cache-Control: no-store`.
+- The PostgreSQL session adapter persists only the SHA-256 digest, normalized provider identity, issue/expiry timestamps, and revocation timestamp; its migration adds expiry indexing and never stores bearer token values.
+- `GitHubHostedOAuthFlow` binds PKCE completion to one-time, redirect-bound callback state; the in-memory and PostgreSQL state adapters hash state values, expire records, and delete them on every consume attempt. `GitHubPublisherTokenVerifier` treats only GitHub HTTP 401 as an invalid credential and propagates network/provider failures for generic API outage handling.
+- Hosted API callback routes allow redirects only to configured same-origin relative paths, set sessions as `Secure`, `HttpOnly`, `SameSite=Lax`, bounded-lifetime cookies, and never include provider or AgentCargo token values in redirect URLs or response bodies. Cookie publisher resolution rejects malformed or duplicate session cookies.
+- Signed artifact upload URLs are digest- and byte-count-bound, use bounded expiries, and are issued only after release ownership is resolved. Completion checks the object-store head metadata against the declared SHA-256 digest, canonical media type, and byte count before durable completion state is recorded.
+- Upload intent and completion metadata are stored separately from public release projections. Completion enters `scanning` state; worker validation must activate a release before anonymous read routes can expose it.
+- Scan jobs use PostgreSQL uniqueness, short leases, `FOR UPDATE SKIP LOCKED`, attempt tracking, bounded error text, and retry timestamps. The worker rechecks the digest while extracting, rejects non-canonical archives, compares extracted manifest/file metadata with the completion request, and persists only bounded scan evidence.
+
+Residual auth-handoff risk:
+
+- The file backend is a permission-restricted fallback, not an OS keychain. Web-app composition, short-lived scope enforcement, expiry cleanup/eviction policy, platform keychain integration, authenticated publication, and explicit deployment composition remain pending; callback code verifiers require normal database encryption and access controls while resident. Worker activation is implemented behind an injected artifact fetcher and PostgreSQL projection boundary; production object-store fetch composition and operational worker scheduling remain deployment concerns.
+
 Direct GitHub repository access is not part of MVP identity and therefore is outside the current local threat surface.
 
 ### 6.9 AgentCargo supply chain
@@ -219,13 +260,14 @@ Required controls include pinned lockfile-based installs, deny-by-default depend
 - Invalid lockfiles and invalid managed destinations.
 - Clean, modified, missing, or invalid installation state.
 - Active, stale, or malformed scope operation locks.
-- Abandoned install and removal staging paths.
+- Abandoned install, removal, update, and unreferenced rollback staging paths.
+- Invalid, missing, drifted, or lockfile-mismatched retained rollback state.
 
 It does not automatically delete a lock, staging directory, or preserved local file. Recovery automation must first define ownership proof, user confirmation, and rollback behavior for each interruption point.
 
 ## 8. Verification expectations
 
-Security-relevant changes require tests proportional to the boundary changed. The current suite covers deterministic digest vectors, malicious archive headers and paths, links and special files, expansion limits, destination containment, lockfile validation, installation rollback, drift classification, forced preservation of untracked files, invalid-link refusal, stale locks, and abandoned stages across the configured operating-system and Node.js CI matrix.
+Security-relevant changes require tests proportional to the boundary changed. The current suite covers deterministic digest vectors, malicious archive headers and paths, links and special files, expansion limits, destination containment, lockfile/rollback-state validation, installation and update failure recovery, reversible rollback, drift classification, forced preservation of untracked files, invalid-link refusal, no-follow audit scanning, stale locks, and abandoned stages across the configured operating-system and Node.js CI matrix.
 
 Before a public beta, AgentCargo also needs archive/parser fuzzing, a focused external review of artifact and filesystem transactions, hosted authentication and authorization tests, dependency/release provenance checks, and an incident-response exercise.
 
@@ -237,5 +279,5 @@ A public security policy and private reporting channel must be added before exte
 - Remote registry installation is implemented.
 - Authentication or publishing launches.
 - Scanner rules begin blocking or quarantining content.
-- Update or rollback mutates existing installations.
+- Update/rollback recovery state or transaction ordering changes.
 - Private packages or organization policy are introduced.

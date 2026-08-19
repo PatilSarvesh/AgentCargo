@@ -219,6 +219,8 @@ describe("doctorInstallations", () => {
     const skillsRoot = path.dirname(fixture.install.destination);
     await mkdir(path.join(skillsRoot, ".agentcargo-stage-interrupted"));
     await mkdir(path.join(skillsRoot, ".agentcargo-remove-interrupted"));
+    await mkdir(path.join(skillsRoot, ".agentcargo-update-interrupted"));
+    await mkdir(path.join(skillsRoot, ".agentcargo-rollback-orphaned"));
 
     const result = await doctorInstallations(fixture.lifecycleInput);
 
@@ -227,6 +229,8 @@ describe("doctorInstallations", () => {
       "DOCTOR_STALE_OPERATION_LOCK",
       "DOCTOR_ABANDONED_INSTALL",
       "DOCTOR_ABANDONED_REMOVAL",
+      "DOCTOR_ABANDONED_UPDATE",
+      "DOCTOR_ABANDONED_ROLLBACK",
     ]));
     expect(result.installations[0]?.state).toBe("clean");
   });

@@ -1,0 +1,1510 @@
+{
+  "openapi": "3.1.0",
+  "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+  "info": {
+    "title": "AgentCargo Registry API",
+    "version": "1.0.0",
+    "description": "Anonymous read operations plus authenticated release reservation, digest-bound artifact upload, and scanning completion for immutable AgentCargo skill releases."
+  },
+  "servers": [
+    {
+      "url": "https://registry.example.com"
+    }
+  ],
+  "paths": {
+    "/v1/auth/github/start": {
+      "get": {
+        "operationId": "startGitHubAuthorization",
+        "summary": "Start hosted GitHub authorization",
+        "security": [],
+        "responses": {
+          "302": {
+            "description": "Redirects the browser to GitHub's authorization page",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string",
+                  "format": "uri-reference"
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "501": {
+            "$ref": "#/components/responses/AuthNotConfigured"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/auth/github/callback": {
+      "get": {
+        "operationId": "completeGitHubAuthorization",
+        "summary": "Complete hosted GitHub authorization",
+        "security": [],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/OAuthCode"
+          },
+          {
+            "$ref": "#/components/parameters/OAuthState"
+          },
+          {
+            "$ref": "#/components/parameters/OAuthError"
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirects to the configured application path and sets an HttpOnly session cookie",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string",
+                  "format": "uri-reference"
+                }
+              },
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "501": {
+            "$ref": "#/components/responses/AuthNotConfigured"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/auth/github/session": {
+      "post": {
+        "operationId": "exchangeGitHubSession",
+        "summary": "Exchange a GitHub bearer credential for an AgentCargo session",
+        "description": "Exchanges a provider-verified GitHub bearer credential for a short-lived AgentCargo bearer session. The response is never cacheable.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistryAuthSessionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "A short-lived AgentCargo session",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryAuthSessionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "501": {
+            "$ref": "#/components/responses/AuthNotConfigured"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/search": {
+      "get": {
+        "operationId": "searchPackages",
+        "summary": "Search public packages",
+        "security": [],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Query"
+          },
+          {
+            "$ref": "#/components/parameters/Host"
+          },
+          {
+            "$ref": "#/components/parameters/Scope"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Public package summaries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistrySearchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/v1/packages/{namespace}/{name}": {
+      "get": {
+        "operationId": "getPackage",
+        "summary": "Get a public package summary",
+        "security": [],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Namespace"
+          },
+          {
+            "$ref": "#/components/parameters/Name"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Public package summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryPackageSummary"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/v1/packages/{namespace}/{name}/versions/{version}": {
+      "get": {
+        "operationId": "getRelease",
+        "summary": "Resolve one immutable public release",
+        "security": [],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Namespace"
+          },
+          {
+            "$ref": "#/components/parameters/Name"
+          },
+          {
+            "$ref": "#/components/parameters/Version"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Immutable release metadata and a request-scoped artifact URL",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "May be cached according to the URL expiry; release identity is immutable."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryReleaseLookupResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "410": {
+            "$ref": "#/components/responses/Quarantined"
+          }
+        }
+      }
+    },
+    "/v1/packages/{namespace}/{name}/releases": {
+      "post": {
+        "operationId": "reserveRelease",
+        "summary": "Reserve an immutable release version",
+        "description": "Requires an authenticated publisher context. The current API implementation keeps this route unavailable until authentication, namespace authorization, and durable reservation persistence are configured.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Namespace"
+          },
+          {
+            "$ref": "#/components/parameters/Name"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistryReleaseReservationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "A newly reserved release coordinate",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryReleaseReservation"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "An idempotent replay of an existing reservation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryReleaseReservation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "501": {
+            "$ref": "#/components/responses/NotConfigured"
+          }
+        }
+      }
+    },
+    "/v1/releases/{releaseId}/upload-url": {
+      "post": {
+        "operationId": "createReleaseArtifactUploadUrl",
+        "summary": "Create a signed upload URL for a reserved release",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReleaseId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistryArtifactUploadRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "A newly created signed upload URL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryArtifactUploadResponse"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "An idempotent replay of an upload URL request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryArtifactUploadResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "501": {
+            "$ref": "#/components/responses/NotConfigured"
+          }
+        }
+      }
+    },
+    "/v1/releases/{releaseId}/complete": {
+      "post": {
+        "operationId": "completeReleaseUpload",
+        "summary": "Complete an uploaded release and mark it for scanning",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReleaseId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistryReleaseCompletionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "The uploaded release is queued for scanning",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryReleaseCompletionResponse"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "An idempotent replay of release completion",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryReleaseCompletionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "501": {
+            "$ref": "#/components/responses/NotConfigured"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "parameters": {
+      "Query": {
+        "name": "q",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "Host": {
+        "name": "host",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        }
+      },
+      "Scope": {
+        "name": "scope",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/RegistryScope"
+        }
+      },
+      "Cursor": {
+        "name": "cursor",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "Limit": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 20
+        }
+      },
+      "OAuthCode": {
+        "name": "code",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384
+        }
+      },
+      "OAuthState": {
+        "name": "state",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 512,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        }
+      },
+      "OAuthError": {
+        "name": "error",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "Namespace": {
+        "name": "namespace",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "maxLength": 64
+        }
+      },
+      "Name": {
+        "name": "name",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "maxLength": 64
+        }
+      },
+      "ReleaseId": {
+        "name": "releaseId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        }
+      },
+      "Version": {
+        "name": "version",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "The request is invalid",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/RegistryApiError"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "The package or release does not exist publicly",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/RegistryApiError"
+            }
+          }
+        }
+      },
+      "Quarantined": {
+        "description": "The release is quarantined and cannot be installed through the public read path",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/RegistryApiError"
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "The anonymous read rate limit was exceeded",
+        "headers": {
+          "Retry-After": {
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/RegistryApiError"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "A valid authenticated publisher context is required",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/RegistryApiError"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "The idempotency key or release coordinate conflicts with an existing reservation",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/RegistryApiError"
+            }
+          }
+        }
+      },
+      "NotConfigured": {
+        "description": "Authenticated publishing is not configured on this registry instance",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/RegistryApiError"
+            }
+          }
+        }
+      },
+      "AuthNotConfigured": {
+        "description": "Hosted authentication is not configured on this registry instance",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/RegistryApiError"
+            }
+          }
+        }
+      },
+      "ServiceUnavailable": {
+        "description": "The identity provider or registry is temporarily unavailable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/RegistryApiError"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "RegistryApiVersion": {
+        "type": "string",
+        "const": "v1"
+      },
+      "RegistryScope": {
+        "type": "string",
+        "enum": [
+          "project",
+          "user"
+        ]
+      },
+      "RegistryPublisherIdentity": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "provider",
+          "subject"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string",
+            "const": "github"
+          },
+          "subject": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "login": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        }
+      },
+      "RegistryAuthSession": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "accessToken",
+          "tokenType",
+          "expiresAt",
+          "identity",
+          "scopes"
+        ],
+        "properties": {
+          "accessToken": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16384
+          },
+          "tokenType": {
+            "type": "string",
+            "const": "bearer"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "identity": {
+            "$ref": "#/components/schemas/RegistryPublisherIdentity"
+          },
+          "scopes": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 2,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/RegistrySessionScope"
+            }
+          }
+        }
+      },
+      "RegistryAuthSessionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "scopes": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 2,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/RegistrySessionScope"
+            }
+          }
+        }
+      },
+      "RegistryAuthSessionResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "session"
+        ],
+        "properties": {
+          "apiVersion": {
+            "$ref": "#/components/schemas/RegistryApiVersion"
+          },
+          "session": {
+            "$ref": "#/components/schemas/RegistryAuthSession"
+          }
+        }
+      },
+      "Sha256Digest": {
+        "type": "string",
+        "pattern": "^sha256:[a-f0-9]{64}$"
+      },
+      "RegistrySessionScope": {
+        "type": "string",
+        "enum": [
+          "publisher:read",
+          "publisher:write"
+        ]
+      },
+      "PackageCoordinate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "namespace",
+          "name"
+        ],
+        "properties": {
+          "namespace": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+          }
+        }
+      },
+      "ReleaseCoordinate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "namespace",
+          "name",
+          "version"
+        ],
+        "properties": {
+          "namespace": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+          },
+          "version": {
+            "type": "string",
+            "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+          }
+        }
+      },
+      "RegistryReleaseReservationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "idempotencyKey"
+        ],
+        "properties": {
+          "version": {
+            "$ref": "#/components/schemas/ReleaseCoordinate/properties/version"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "RegistryReleaseReservation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "releaseId",
+          "coordinate",
+          "status",
+          "createdAt",
+          "expiresAt"
+        ],
+        "properties": {
+          "apiVersion": {
+            "$ref": "#/components/schemas/RegistryApiVersion"
+          },
+          "releaseId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "coordinate": {
+            "$ref": "#/components/schemas/ReleaseCoordinate"
+          },
+          "status": {
+            "type": "string",
+            "const": "reserved"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RegistryArtifactMetadata": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "format",
+          "mediaType",
+          "digest",
+          "bytes"
+        ],
+        "properties": {
+          "format": {
+            "type": "string",
+            "const": "agentcargo-ustar-v1"
+          },
+          "mediaType": {
+            "type": "string",
+            "const": "application/vnd.agentcargo.ustar-v1"
+          },
+          "digest": {
+            "$ref": "#/components/schemas/Sha256Digest"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "RegistryArtifactUploadRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "digest",
+          "bytes"
+        ],
+        "properties": {
+          "digest": {
+            "$ref": "#/components/schemas/Sha256Digest"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "RegistryArtifactUploadResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "releaseId",
+          "coordinate",
+          "digest",
+          "bytes",
+          "uploadUrl",
+          "expiresAt"
+        ],
+        "properties": {
+          "apiVersion": {
+            "$ref": "#/components/schemas/RegistryApiVersion"
+          },
+          "releaseId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "coordinate": {
+            "$ref": "#/components/schemas/ReleaseCoordinate"
+          },
+          "digest": {
+            "$ref": "#/components/schemas/Sha256Digest"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "uploadUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RegistryReleaseCompletionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "artifact",
+          "declared",
+          "files",
+          "scan",
+          "source"
+        ],
+        "properties": {
+          "artifact": {
+            "$ref": "#/components/schemas/RegistryArtifactMetadata"
+          },
+          "declared": {
+            "$ref": "#/components/schemas/RegistryDeclaredMetadata"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RegistryFileSummary"
+            }
+          },
+          "scan": {
+            "$ref": "#/components/schemas/RegistryScanSummary"
+          },
+          "source": {
+            "$ref": "#/components/schemas/RegistrySourceReference"
+          }
+        }
+      },
+      "RegistryReleaseCompletionResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "releaseId",
+          "coordinate",
+          "status",
+          "artifact",
+          "completedAt"
+        ],
+        "properties": {
+          "apiVersion": {
+            "$ref": "#/components/schemas/RegistryApiVersion"
+          },
+          "releaseId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "coordinate": {
+            "$ref": "#/components/schemas/ReleaseCoordinate"
+          },
+          "status": {
+            "type": "string",
+            "const": "scanning"
+          },
+          "artifact": {
+            "$ref": "#/components/schemas/RegistryArtifactMetadata"
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "HostCompatibility": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scopes"
+        ],
+        "properties": {
+          "scopes": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/RegistryScope"
+            }
+          }
+        }
+      },
+      "CompatibilityMap": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/components/schemas/HostCompatibility"
+        }
+      },
+      "RegistryDeclaredMetadata": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "description",
+          "tags",
+          "compatibility"
+        ],
+        "properties": {
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "license": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "repositoryUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://"
+          },
+          "tags": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          },
+          "compatibility": {
+            "$ref": "#/components/schemas/CompatibilityMap"
+          },
+          "capabilities": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "dependencies": {
+            "type": "array",
+            "maxItems": 64,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        }
+      },
+      "RegistryArtifactDownload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "url",
+          "expiresAt"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RegistryArtifactReference": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "format",
+          "mediaType",
+          "digest",
+          "bytes",
+          "download"
+        ],
+        "properties": {
+          "format": {
+            "type": "string",
+            "const": "agentcargo-ustar-v1"
+          },
+          "mediaType": {
+            "type": "string",
+            "const": "application/vnd.agentcargo.ustar-v1"
+          },
+          "digest": {
+            "$ref": "#/components/schemas/Sha256Digest"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "download": {
+            "$ref": "#/components/schemas/RegistryArtifactDownload"
+          }
+        }
+      },
+      "RegistryFileSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "bytes",
+          "executable",
+          "scriptLike"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "executable": {
+            "type": "boolean"
+          },
+          "scriptLike": {
+            "type": "boolean"
+          }
+        }
+      },
+      "RegistryFindingSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ruleId",
+          "ruleVersion",
+          "severity",
+          "message",
+          "explanation",
+          "remediation"
+        ],
+        "properties": {
+          "ruleId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "ruleVersion": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "info",
+              "warning",
+              "error"
+            ]
+          },
+          "path": {
+            "$ref": "#/components/schemas/RegistryFileSummary/properties/path"
+          },
+          "evidence": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "explanation": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "remediation": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        }
+      },
+      "RegistryScanSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scannerVersion",
+          "completedAt",
+          "findings"
+        ],
+        "properties": {
+          "scannerVersion": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RegistryFindingSummary"
+            }
+          }
+        }
+      },
+      "RegistrySourceReference": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "repositoryUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://"
+          },
+          "commit": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "RegistryRelease": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "coordinate",
+          "status",
+          "declared",
+          "artifact",
+          "files",
+          "scan",
+          "source",
+          "publishedAt"
+        ],
+        "properties": {
+          "apiVersion": {
+            "$ref": "#/components/schemas/RegistryApiVersion"
+          },
+          "coordinate": {
+            "$ref": "#/components/schemas/ReleaseCoordinate"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "deprecated"
+            ]
+          },
+          "declared": {
+            "$ref": "#/components/schemas/RegistryDeclaredMetadata"
+          },
+          "artifact": {
+            "$ref": "#/components/schemas/RegistryArtifactReference"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RegistryFileSummary"
+            }
+          },
+          "scan": {
+            "$ref": "#/components/schemas/RegistryScanSummary"
+          },
+          "source": {
+            "$ref": "#/components/schemas/RegistrySourceReference"
+          },
+          "publishedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RegistryPackageSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "package",
+          "description",
+          "compatibility",
+          "tags",
+          "hasScripts",
+          "status"
+        ],
+        "properties": {
+          "apiVersion": {
+            "$ref": "#/components/schemas/RegistryApiVersion"
+          },
+          "package": {
+            "$ref": "#/components/schemas/PackageCoordinate"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "latestVersion": {
+            "type": "string",
+            "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+          },
+          "compatibility": {
+            "$ref": "#/components/schemas/CompatibilityMap"
+          },
+          "tags": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          },
+          "hasScripts": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "deprecated"
+            ]
+          }
+        }
+      },
+      "RegistrySearchResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "items"
+        ],
+        "properties": {
+          "apiVersion": {
+            "$ref": "#/components/schemas/RegistryApiVersion"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RegistryPackageSummary"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        }
+      },
+      "RegistryReleaseLookupResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "release"
+        ],
+        "properties": {
+          "apiVersion": {
+            "$ref": "#/components/schemas/RegistryApiVersion"
+          },
+          "release": {
+            "$ref": "#/components/schemas/RegistryRelease"
+          }
+        }
+      },
+      "RegistryApiError": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "error"
+        ],
+        "properties": {
+          "apiVersion": {
+            "$ref": "#/components/schemas/RegistryApiVersion"
+          },
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "message",
+              "requestId"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 96
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "details": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

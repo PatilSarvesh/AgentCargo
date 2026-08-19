@@ -6,7 +6,7 @@
 | Product | AgentCargo |
 | Release | MVP / v0.1 |
 | Primary audience | Developers using AI coding agents |
-| Initial hosts | Codex and one additional coding agent |
+| Initial hosts | Codex and Claude Code |
 | Business model | Free public service; no monetization in MVP |
 
 ## 1. Product summary
@@ -51,7 +51,7 @@ The MVP must:
 - Assign the skill a unique publisher-scoped name and immutable semantic version.
 - Validate package structure before making a release installable.
 - Let a developer find and inspect skills without signing in.
-- Install a selected version into Codex and one additional supported host.
+- Install a selected version into Codex and Claude Code.
 - Support project and user installation scopes when the target host provides them.
 - Verify an artifact checksum before installation.
 - Record exact installed versions in a lockfile.
@@ -202,6 +202,7 @@ agentcargo auth login
 agentcargo auth logout
 agentcargo init
 agentcargo validate [path]
+agentcargo scan [path]
 agentcargo pack [path] [--output <file>]
 agentcargo publish [path]
 agentcargo search <query>
@@ -333,6 +334,9 @@ capabilities:
   network: false
   environment: []
 
+# Descriptive runtime requirements; AgentCargo does not install or resolve them.
+dependencies: [git>=2.40, node>=22]
+
 tags: [react, review, accessibility]
 ```
 
@@ -395,10 +399,10 @@ The MVP is ready for public beta only when:
 ## 15. Decisions made for MVP
 
 - The product is free to use.
-- The CLI, specification, adapters, and scanner rules are open source.
+- The CLI, specification, adapters, scanner rules, and public API contracts are open source under Apache License 2.0.
 - The registry is a hosted public service and may remain separately deployed.
 - The package format wraps existing skills rather than replacing their native format.
-- Codex is the first adapter; the second adapter is selected during Milestone 2 after its current host contract is verified.
+- Codex is the first adapter; Claude Code is the selected second adapter based on the dated comparison and verified host contract in ADR 0005.
 - Project installations vendor host-ready files beneath the host's project skill root; they do not use symlinks or a central content cache in the MVP.
 - Only static analysis is performed server-side.
 - Trust is communicated as evidence and findings, not a composite score.
@@ -408,7 +412,6 @@ The MVP is ready for public beta only when:
 
 These questions do not block initial repository setup but must be resolved before public beta:
 
-- Which second agent has the strongest user demand and a stable local skill contract?
 - Should project installations commit the full skill, a pointer, or both?
 - Should anonymous aggregate download counts be displayed at all?
 - What package and artifact size limits balance useful assets with affordable hosting?

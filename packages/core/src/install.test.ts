@@ -77,6 +77,28 @@ describe("installLocalSkill", () => {
     expect((await readLockfile(result.lockfilePath)).packages[0]?.scope).toBe("user");
   });
 
+  it("rejects an artifact when the expected registry digest does not match", async () => {
+    const root = await createTemporaryDirectory();
+    const projectRoot = path.join(root, "project");
+    const userHome = path.join(root, "home");
+    await Promise.all([mkdir(projectRoot), mkdir(userHome)]);
+    const skill = await createSkillFixture(path.join(root, "source", "digest-skill"));
+
+    await expect(
+      installLocalSkill({
+        sourcePath: skill,
+        adapter: new CodexAdapter(),
+        scope: "project",
+        context: { projectRoot, userHome },
+        sourceType: "registry",
+        expectedDigest: `sha256:${"0".repeat(64)}`,
+      }),
+    ).rejects.toMatchObject({ code: "INSTALL_ARTIFACT_DIGEST_MISMATCH" });
+    await expect(stat(path.join(projectRoot, ".agents", "skills", "digest-skill"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("refuses to overwrite an unmanaged destination", async () => {
     const root = await createTemporaryDirectory();
     const projectRoot = path.join(root, "project");

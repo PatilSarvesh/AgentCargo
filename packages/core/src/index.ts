@@ -25,6 +25,50 @@ export {
   installLocalSkill,
 } from "./install.js";
 export {
+  STATIC_RULE_VERSION,
+  STATIC_SCANNER_VERSION,
+  scanInstalledSkillDirectory,
+  scanSkillDirectory,
+} from "./scanner.js";
+export { auditInstallations } from "./audit.js";
+export {
+  AgentCargoUpdatePreviewError,
+  createUpdatePreview,
+} from "./update-preview.js";
+export {
+  AgentCargoUpdateError,
+  previewInstallationUpdate,
+  rollbackInstallation,
+  updateInstallation,
+} from "./update.js";
+export {
+  AgentCargoRollbackStateError,
+  ROLLBACK_STATE_NAME,
+  emptyRollbackState,
+  readRollbackState,
+  rollbackStatePath,
+  validateRollbackState,
+  writeRollbackStateAtomic,
+} from "./rollback-state.js";
+export type {
+  ScanSkillDirectoryOptions,
+  StaticFindingSeverity,
+  StaticScanFinding,
+  StaticScanResult,
+} from "./scanner.js";
+export type {
+  ArtifactIntegrityReport,
+  AuditFinding,
+  AuditFindingCategory,
+  AuditFindingSeverity,
+  AuditInstallationsOptions,
+  AuditSummary,
+  InstallationAudit,
+  InstallationAuditResult,
+  InstallationScanReport,
+  ReceiptIntegrityReport,
+} from "./audit.js";
+export {
   AgentCargoLifecycleError,
   doctorInstallations,
   listInstallations,
@@ -65,6 +109,28 @@ export type {
   SkillTemplate,
   SkillValidationResult,
 } from "./types.js";
+export type {
+  UpdateDeclaredSnapshot,
+  UpdateFileChange,
+  UpdateFindingChange,
+  UpdateFindingSnapshot,
+  UpdateManifestChange,
+  UpdatePackageSnapshot,
+  UpdatePreview,
+  UpdateValueChange,
+} from "./update-preview.js";
+export type {
+  InstallationUpdatePreviewResult,
+  PreviewInstallationUpdateInput,
+  InstallationRollbackResult,
+  InstallationUpdateResult,
+  RollbackInstallationInput,
+  UpdateInstallationInput,
+} from "./update.js";
+export type {
+  AgentCargoRollbackRecord,
+  AgentCargoRollbackState,
+} from "./rollback-state.js";
 export type { InstallLocalSkillInput } from "./install.js";
 export type { LifecycleScopeInput, RemoveInstallationInput } from "./lifecycle.js";
 export type { OperationLockStatus } from "./operation-lock.js";

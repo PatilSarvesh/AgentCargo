@@ -8,6 +8,10 @@ compatibility:
     scopes:
       - project
       - user
+  claude-code:
+    scopes:
+      - project
+      - user
 capabilities:
   filesystem:
     read: false
