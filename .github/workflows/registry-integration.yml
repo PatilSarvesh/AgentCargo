@@ -1,0 +1,71 @@
+name: Registry integration
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  live-registry:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: agentcargo
+          POSTGRES_PASSWORD: agentcargo
+          POSTGRES_DB: agentcargo
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agentcargo -d agentcargo"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.16.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Start MinIO
+        run: >-
+          docker run --detach --name agentcargo-minio
+          --publish 9000:9000
+          --env MINIO_ROOT_USER=minioadmin
+          --env MINIO_ROOT_PASSWORD=minioadmin
+          minio/minio:RELEASE.2024-05-10T01-41-38Z server /data
+      - name: Wait for MinIO
+        run: |
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:9000/minio/health/live > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "MinIO did not become ready" >&2
+          docker logs agentcargo-minio
+          exit 1
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Run live registry integration
+        run: pnpm --filter @agentcargo/registry-integration test
+        env:
+          AGENTCARGO_REGISTRY_INTEGRATION_MODULE: ${{ github.workspace }}/packages/registry-integration/dist/ci-environment.js
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: agentcargo
+          PGPASSWORD: agentcargo
+          PGDATABASE: agentcargo
+          AGENTCARGO_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+          AGENTCARGO_TEST_S3_REGION: us-east-1
+          AGENTCARGO_TEST_S3_ACCESS_KEY: minioadmin
+          AGENTCARGO_TEST_S3_SECRET_KEY: minioadmin
+          AGENTCARGO_TEST_S3_BUCKET: agentcargo

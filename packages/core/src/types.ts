@@ -30,6 +30,7 @@ export interface AgentCargoManifest {
   repository?: string;
   compatibility?: Record<string, AgentCargoHostCompatibility>;
   capabilities?: AgentCargoCapabilities;
+  dependencies?: string[];
   tags?: string[];
 }
 

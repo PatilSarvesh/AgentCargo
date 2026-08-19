@@ -2,9 +2,20 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promi
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { defineAdapterContractTests } from "@agentcargo/adapter-contract/test-suite";
 import { CodexAdapter } from "./index.js";
 
 const temporaryDirectories: string[] = [];
+
+defineAdapterContractTests({
+  createAdapter: () => new CodexAdapter(),
+  expectedSkillsDirectory: ".agents/skills",
+  compatibilityNotDeclaredCode: "CODEX_COMPATIBILITY_NOT_DECLARED",
+  scopeNotDeclaredCode: "CODEX_SCOPE_NOT_DECLARED",
+  skillRequiredCode: "CODEX_SKILL_MD_REQUIRED",
+  stagedSkillInvalidCode: "CODEX_STAGED_SKILL_INVALID",
+  projectRootInvalidCode: "CODEX_PROJECT_ROOT_INVALID",
+});
 
 afterEach(async () => {
   await Promise.all(

@@ -6,13 +6,13 @@ This roadmap sequences risk before polish. Each milestone should end with a demo
 
 Outcome: contributors can clone, understand, test, and change the project consistently.
 
-- Initialize Git and choose an open-source license for the public code.
+- Initialize Git and choose Apache License 2.0 for the public code.
 - Create the pnpm TypeScript monorepo.
 - Add formatting, linting, type checking, unit tests, and CI.
 - Add contribution guidelines, code of conduct, security policy, and issue templates.
 - Write architecture decision records for the monorepo, package naming, archive format, and open-source boundary.
 - Verify the current native contracts for Codex and candidate second hosts.
-- Select the second host using user demand, format stability, and testability.
+- Select Claude Code as the second host using user demand, format stability, and testability.
 
 Exit criteria:
 
@@ -47,11 +47,11 @@ Exit criteria:
 
 Outcome: AgentCargo proves that the package abstraction is genuinely cross-agent.
 
-- Document the selected host's current skill contract and provenance.
-- Implement its project/user scopes where supported.
+- Maintain the verified Claude Code skill contract and provenance.
+- Implement Claude Code project and user scopes.
 - Run the shared adapter contract suite.
 - Add `agentcargo doctor` host detection.
-- Document how contributors create third-party adapters.
+- Document how contributors create third-party adapters in [`docs/ADAPTERS.md`](ADAPTERS.md).
 - Add adapter compatibility metadata and last-verified host version.
 
 Exit criteria:
@@ -64,7 +64,11 @@ Exit criteria:
 
 Outcome: users can search, inspect, resolve, download, and install immutable public releases.
 
+- Define versioned public read models and immutable release lookup semantics in `@agentcargo/registry-contract`.
+- Add the checked-in OpenAPI 3.1 contract and runtime validation for anonymous read responses.
+- Implement the typed release repository boundary and read-only Fastify routes.
 - Create PostgreSQL schema and migrations.
+- Add digest-addressed S3-compatible artifact storage.
 - Implement registry read API and OpenAPI contract.
 - Add S3-compatible artifact storage.
 - Implement package detail and search pages.
@@ -85,10 +89,11 @@ Outcome: external creators can publish without direct maintainer involvement.
 
 - Add GitHub OAuth and namespace creation.
 - Implement CLI authentication without exposing tokens.
-- Implement release reservation, upload, completion, and idempotency.
-- Build worker state machine and PostgreSQL-backed jobs.
-- Share package validation rules between CLI and worker.
-- Add initial static scanner rules and explainable findings.
+- [x] Implement release reservation, upload, completion, and idempotency.
+- [x] Add authenticated CLI publication from local skill directories.
+- [x] Build the worker state machine and PostgreSQL-backed jobs.
+- [x] Share package validation rules between CLI and worker.
+- [x] Add initial static scanner rules and explainable findings.
 - Add publisher pages and version history.
 - Reject unsafe archive structure and known-denylisted content.
 
@@ -102,9 +107,9 @@ Exit criteria:
 
 Outcome: users can understand and control changes after installation, and maintainers can respond to abuse.
 
-- Implement `update --dry-run` with semantic and file diffs.
-- Implement atomic update and rollback.
-- Implement `audit` and local drift detection.
+- [x] Implement `update --dry-run` with semantic and file diffs.
+- [x] Implement atomic update and rollback.
+- [x] Implement `audit` and local drift detection.
 - Add deprecation, quarantine, reports, and audit events.
 - Add digest denylist distribution.
 - Add rate limits, abuse controls, and maintainer runbooks.
