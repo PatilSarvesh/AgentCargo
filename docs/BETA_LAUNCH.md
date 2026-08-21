@@ -13,6 +13,8 @@ From a clean checkout, run:
 ```bash
 pnpm install --frozen-lockfile
 pnpm verify
+pnpm check:migrations
+pnpm test:migrations
 pnpm check:beta
 pnpm test:beta
 ```
@@ -22,6 +24,12 @@ exit status remains successful while deployment/external gates are pending;
 `--strict` fails when a repository gate is missing, which is the mode used by
 CI. The verifier checks paths, root package scripts, and matching verification
 evidence in `docs/STATUS.md`; it never checks secrets or calls a hosted service.
+
+`pnpm check:migrations` is a repository-only preflight. It verifies that the
+checked-in PostgreSQL migrations have safe numbered filenames, no gaps or
+duplicate numbers, and no destructive SQL beyond idempotent trigger/constraint
+drops. It reports migration digests and the latest checked-in version, but it
+does not connect to PostgreSQL or claim that any deployment has applied them.
 
 The anonymous CLI status view is available for operator checks and automation:
 

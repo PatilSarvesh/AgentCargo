@@ -2,10 +2,11 @@ import { generateKeyPairSync } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildCliRelease, verifyCliRelease } from "./release-artifacts.js";
 
-const workspaceRoot = path.resolve(new URL("../../..", import.meta.url).pathname);
+const workspaceRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {

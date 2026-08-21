@@ -81,8 +81,12 @@
       "category": "repository",
       "title": "Workspace verification evidence",
       "status": "ready",
-      "requiredPaths": ["package.json"],
-      "requiredPackageScripts": ["verify", "check:beta"],
+      "requiredPaths": [
+        "package.json",
+        "scripts/check-migrations.mjs",
+        "scripts/check-migrations.test.mjs"
+      ],
+      "requiredPackageScripts": ["verify", "check:migrations", "test:migrations", "check:beta"],
       "statusEvidence": "Full workspace verification PASS"
     },
     {

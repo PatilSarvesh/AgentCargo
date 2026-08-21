@@ -327,11 +327,15 @@ Policy documentation checks PASS: README links resolve to privacy, content, plat
 Beta readiness verifier PASS: `node scripts/check-beta-readiness.mjs --strict` reports all six repository gates ready and six deployment/external gates pending without exposing secrets
 Beta readiness tests PASS: repository-ready/pending summary and missing-path/evidence failure cases (2 tests)
 Beta readiness workflow check PASS: CI runs `pnpm check:beta` after the existing cross-platform workspace verification
+Migration preflight verification PASS: `pnpm check:migrations` reports ten contiguous migrations through `0010`; focused tests cover malformed names, gaps, duplicates, destructive SQL, and unreadable directories; the result explicitly reports `databaseState: not_checked`
+Windows CI path-fix verification PASS: the signed CLI release-artifact tests now resolve the workspace root with `fileURLToPath`; the prior Node 24 Windows `D:\\D:\\a\\...` path failure is covered by the same two-test suite and no longer reproduces locally
 Beta feedback/metrics templates PASS: JSON metric definitions parse, feedback fields are bounded/pseudonymous, and PRD adoption/reliability targets map to aggregate records
 Beta launch handoff checks PASS: readiness/metrics JSON parse and local links resolve across README, launch, feedback, and policy documents
 Full workspace verification PASS on 2026-08-20: `pnpm verify` completed all package checks/builds/tests; the live registry integration test remained skipped without its opt-in environment
 CLI status slice verification PASS on 2026-08-20: focused CLI check/test, strict beta-readiness check/test, workspace `pnpm verify`, and web build/rendered tests/lint all passed; live registry integration remained skipped without opt-in environment
 Starter catalog expansion verification PASS on 2026-08-21: ten fixture directories match catalog metadata; core validation/static scanning, web build/rendered tests/lint, `pnpm verify`, beta checks, and `git diff --check` passed; live registry integration remained skipped without opt-in environment
+Full workspace verification PASS on 2026-08-21: `pnpm verify` completed all package checks/builds/tests; the opt-in live registry integration test remained skipped without its environment
+Web workspace verification PASS on 2026-08-21: web production build, 25 rendered/bridge/publication tests, and lint all passed
 Whitespace scan and git diff --check PASS
 ```
 
@@ -372,6 +376,24 @@ Exit condition: operators and automation can consume the same safe public status
 - [x] Define bounded creator, user, maintainer, and adapter-contributor feedback fields plus aggregate-only metric records; external collection remains pending.
 
 Exit condition: a clean checkout can report repository readiness deterministically, while the launch handoff makes deployment and external-user blockers explicit instead of presenting an unsafe all-clear.
+
+### Add PostgreSQL migration preflight verification
+
+- [x] Add `scripts/check-migrations.mjs` with human/JSON output, stable error codes, SHA-256 inventory, strict failure mode, and an explicit `databaseState: not_checked` boundary.
+- [x] Reject unsafe migration entries, invalid names, sequence gaps, duplicate numbers, destructive SQL, and unsafe SQL without connecting to PostgreSQL.
+- [x] Add focused tests for the real ten-migration repository, malformed temporary repositories, and missing migration directories.
+- [x] Wire `check:migrations` and `test:migrations` into the beta scripts, repository readiness evidence, README/development commands, and cross-platform CI.
+- [x] Document that this preflight verifies checked-in repository order only; applied database state remains a deployment concern.
+
+Exit condition: operators get a deterministic migration inventory and strict repository gate before applying migrations, while deployment-only database state remains explicitly unverified.
+
+### Fix Windows release-artifact CI path resolution
+
+- [x] Diagnose the failed `main` CI run: all jobs passed except `verify (windows-latest, 24)`, where the CLI release-artifact tests built an invalid `D:\\D:\\a\\...` workspace path from `URL.pathname`.
+- [x] Use Node's cross-platform `fileURLToPath` conversion in `packages/cli/src/release-artifacts.test.ts`.
+- [x] Verify the focused CLI suite, full workspace verification, beta checks, migration tests, and whitespace checks.
+
+Exit condition: the signed release-artifact test resolves repository paths correctly on Windows, macOS, and Linux without changing release contents or signing behavior.
 
 ### Add bounded reports and append-only moderation audit events
 
@@ -522,6 +544,7 @@ Exit condition: the public-beta catalog has a maintained, reviewable seed set th
 - [x] Expose the same bounded operational status through `agentcargo status` with stable human/JSON output and outage exit semantics; live deployment probes and alert routing remain pending.
 - [x] Publish privacy, content, platform-support, and retention documentation; hosted legal identity, contacts, jurisdiction, and exact schedules remain pending.
 - [x] Add an auditable `docs/BETA_READINESS.json` launch checklist, strict local verifier, and cross-platform CI gate that report repository readiness separately from deployment/external blockers.
+- [x] Add a repository-only PostgreSQL migration preflight with strict CI/beta wiring; applied database state and live integration remain deployment work.
 - [x] Define privacy-conscious creator/user feedback and aggregate PRD metric templates; collecting external responses and reaching targets remain pending.
 - [ ] Recruit external creators/users and measure the PRD beta learning targets.
 
