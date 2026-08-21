@@ -329,6 +329,7 @@ Beta readiness tests PASS: repository-ready/pending summary and missing-path/evi
 Beta readiness workflow check PASS: CI runs `pnpm check:beta` after the existing cross-platform workspace verification
 Migration preflight verification PASS: `pnpm check:migrations` reports ten contiguous migrations through `0010`; focused tests cover malformed names, gaps, duplicates, destructive SQL, and unreadable directories; the result explicitly reports `databaseState: not_checked`
 Windows CI path-fix verification PASS: the signed CLI release-artifact tests now resolve the workspace root with `fileURLToPath`; the prior Node 24 Windows `D:\\D:\\a\\...` path failure is covered by the same two-test suite and no longer reproduces locally
+Windows CI timeout hardening PASS: the deterministic signed-bundle test has a bounded 30-second timeout for slower Windows Node 22 runners; no production release behavior changes
 Beta feedback/metrics templates PASS: JSON metric definitions parse, feedback fields are bounded/pseudonymous, and PRD adoption/reliability targets map to aggregate records
 Beta launch handoff checks PASS: readiness/metrics JSON parse and local links resolve across README, launch, feedback, and policy documents
 Full workspace verification PASS on 2026-08-20: `pnpm verify` completed all package checks/builds/tests; the live registry integration test remained skipped without its opt-in environment
@@ -391,6 +392,7 @@ Exit condition: operators get a deterministic migration inventory and strict rep
 
 - [x] Diagnose the failed `main` CI run: all jobs passed except `verify (windows-latest, 24)`, where the CLI release-artifact tests built an invalid `D:\\D:\\a\\...` workspace path from `URL.pathname`.
 - [x] Use Node's cross-platform `fileURLToPath` conversion in `packages/cli/src/release-artifacts.test.ts`.
+- [x] Give the deterministic bundle test a bounded 30-second timeout so slower Windows Node 22 runners do not fail at Vitest's default 5-second limit.
 - [x] Verify the focused CLI suite, full workspace verification, beta checks, migration tests, and whitespace checks.
 
 Exit condition: the signed release-artifact test resolves repository paths correctly on Windows, macOS, and Linux without changing release contents or signing behavior.

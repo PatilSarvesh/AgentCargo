@@ -47,7 +47,7 @@ describe("signed CLI release artifacts", () => {
       "@agentcargo/registry-client",
       "@agentcargo/registry-contract",
     ]);
-  });
+  }, 30_000);
 
   it("rejects an archive changed after signing", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "agentcargo-release-test-"));
