@@ -330,6 +330,7 @@ Beta readiness workflow check PASS: CI runs `pnpm check:beta` after the existing
 Migration preflight verification PASS: `pnpm check:migrations` reports ten contiguous migrations through `0010`; focused tests cover malformed names, gaps, duplicates, destructive SQL, and unreadable directories; the result explicitly reports `databaseState: not_checked`
 Windows CI path-fix verification PASS: the signed CLI release-artifact tests now resolve the workspace root with `fileURLToPath`; the prior Node 24 Windows `D:\\D:\\a\\...` path failure is covered by the same two-test suite and no longer reproduces locally
 Windows CI timeout hardening PASS: the deterministic signed-bundle test has a bounded 30-second timeout for slower Windows Node 22 runners; no production release behavior changes
+Deployment preflight tests PASS: four cases cover valid HTTPS configuration, missing-secret redaction, insecure/credential-bearing URLs, Ed25519 key validation, loopback opt-in, and the repository migration inventory without contacting live services
 Beta feedback/metrics templates PASS: JSON metric definitions parse, feedback fields are bounded/pseudonymous, and PRD adoption/reliability targets map to aggregate records
 Beta launch handoff checks PASS: readiness/metrics JSON parse and local links resolve across README, launch, feedback, and policy documents
 Full workspace verification PASS on 2026-08-20: `pnpm verify` completed all package checks/builds/tests; the live registry integration test remained skipped without its opt-in environment
@@ -337,6 +338,7 @@ CLI status slice verification PASS on 2026-08-20: focused CLI check/test, strict
 Starter catalog expansion verification PASS on 2026-08-21: ten fixture directories match catalog metadata; core validation/static scanning, web build/rendered tests/lint, `pnpm verify`, beta checks, and `git diff --check` passed; live registry integration remained skipped without opt-in environment
 Full workspace verification PASS on 2026-08-21: `pnpm verify` completed all package checks/builds/tests; the opt-in live registry integration test remained skipped without its environment
 Web workspace verification PASS on 2026-08-21: web production build, 25 rendered/bridge/publication tests, and lint all passed
+Deployment preflight/beta verification PASS on 2026-08-21: `pnpm test:deployment`, `pnpm check:beta`, `pnpm test:beta`, and `git diff --check` passed; configured-service health and applied database state remain unverified
 Whitespace scan and git diff --check PASS
 ```
 
@@ -344,7 +346,7 @@ The install and lifecycle test matrix covers Codex project and user scopes, decl
 
 ## In progress
 
-The authenticated publisher read path is complete from the versioned contract through the client, scoped Fastify endpoint, PostgreSQL ownership query, server-only web resolver, and `/publisher` presentation. The API derives publisher ownership only from an exact `publisher:read` session; the browser cannot select a namespace or publisher identity. Reserved, expired, uploading, uploaded, scanning, active, deprecated, quarantined, and rejected immutable versions can be represented without exposing provider or registry tokens. Bounded reports, append-only maintainer audit reads, publisher deprecation, maintainer quarantine/restoration, emergency digest denylist enforcement, route-aware API rate limiting, the operator incident runbook, focused security review, local port coexistence, the browser publication intent handoff, the production worker scheduler, ten maintained starter fixtures, the signed CLI release-bundle workflow, operational status signals, the anonymous `agentcargo status` command, public-beta policy documentation, the auditable readiness handoff, and aggregate feedback/metrics templates are implemented and verified. Browser artifact upload, scanning, and activation remain CLI/registry operations; deployment-specific probes, alert wiring, legal setup, external registry publication/key custody, and creator/user recruitment are next.
+The authenticated publisher read path is complete from the versioned contract through the client, scoped Fastify endpoint, PostgreSQL ownership query, server-only web resolver, and `/publisher` presentation. The API derives publisher ownership only from an exact `publisher:read` session; the browser cannot select a namespace or publisher identity. Reserved, expired, uploading, uploaded, scanning, active, deprecated, quarantined, and rejected immutable versions can be represented without exposing provider or registry tokens. Bounded reports, append-only maintainer audit reads, publisher deprecation, maintainer quarantine/restoration, emergency digest denylist enforcement, route-aware API rate limiting, the operator incident runbook, focused security review, local port coexistence, the browser publication intent handoff, the production worker scheduler, ten maintained starter fixtures, the signed CLI release-bundle workflow, operational status signals, the anonymous `agentcargo status` command, public-beta policy documentation, the auditable readiness handoff, aggregate feedback/metrics templates, and the secret-redacting deployment configuration preflight are implemented and verified. Browser artifact upload, scanning, and activation remain CLI/registry operations; live service provisioning, deployment-specific probes, alert wiring, legal setup, external registry publication/key custody, and creator/user recruitment are next.
 
 ## Recently completed slice
 
@@ -396,6 +398,15 @@ Exit condition: operators get a deterministic migration inventory and strict rep
 - [x] Verify the focused CLI suite, full workspace verification, beta checks, migration tests, and whitespace checks.
 
 Exit condition: the signed release-artifact test resolves repository paths correctly on Windows, macOS, and Linux without changing release contents or signing behavior.
+
+### Add deployment configuration preflight
+
+- [x] Validate the documented registry URL, provider-broker URL, broker credential presence, and Ed25519 release-key shape without printing secret values.
+- [x] Reuse the repository migration inventory and report `serviceHealth: not_checked` and `databaseState: not_checked` explicitly.
+- [x] Add stable human/JSON output, strict failure semantics, loopback opt-in, four focused tests, root package scripts, and a cross-platform CI test step.
+- [x] Document operator usage and keep live service health, migration application, object storage, probes, alerts, and key custody as deployment-owned evidence.
+
+Exit condition: an operator can fail fast on unsafe or incomplete hosted configuration before deployment without mistaking configuration presence for a healthy service or applied database.
 
 ### Add bounded reports and append-only moderation audit events
 
@@ -547,6 +558,7 @@ Exit condition: the public-beta catalog has a maintained, reviewable seed set th
 - [x] Publish privacy, content, platform-support, and retention documentation; hosted legal identity, contacts, jurisdiction, and exact schedules remain pending.
 - [x] Add an auditable `docs/BETA_READINESS.json` launch checklist, strict local verifier, and cross-platform CI gate that report repository readiness separately from deployment/external blockers.
 - [x] Add a repository-only PostgreSQL migration preflight with strict CI/beta wiring; applied database state and live integration remain deployment work.
+- [x] Add a secret-redacting deployment configuration preflight with strict operator mode and CI fixture coverage; live service health and applied database state remain deployment work.
 - [x] Define privacy-conscious creator/user feedback and aggregate PRD metric templates; collecting external responses and reaching targets remain pending.
 - [ ] Recruit external creators/users and measure the PRD beta learning targets.
 
@@ -641,6 +653,7 @@ Exit condition: the implemented vertical slice is packaged for a controlled publ
 - [x] Publish privacy, content, platform-support, and retention documentation; hosted legal identity, contacts, jurisdiction, and exact schedules remain pending.
 - [x] Add the machine-readable public-beta readiness checklist and strict CI/local verifier.
 - [x] Define aggregate-only creator/user feedback and PRD metric templates; external collection remains pending.
+- [x] Add repository/deployment configuration preflight coverage; live service provisioning and operator evidence remain pending.
 - [ ] Recruit external creators and users.
 - [ ] Reach the PRD beta learning targets.
 

@@ -246,6 +246,8 @@ pnpm build
 pnpm verify
 pnpm check:migrations
 pnpm test:migrations
+pnpm check:deployment
+pnpm test:deployment
 pnpm check:beta
 pnpm test:beta
 pnpm dev:cli validate ./examples/hello-skill

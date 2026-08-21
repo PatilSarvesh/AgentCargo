@@ -15,6 +15,7 @@ pnpm install --frozen-lockfile
 pnpm verify
 pnpm check:migrations
 pnpm test:migrations
+pnpm test:deployment
 pnpm check:beta
 pnpm test:beta
 ```
@@ -30,6 +31,15 @@ checked-in PostgreSQL migrations have safe numbered filenames, no gaps or
 duplicate numbers, and no destructive SQL beyond idempotent trigger/constraint
 drops. It reports migration digests and the latest checked-in version, but it
 does not connect to PostgreSQL or claim that any deployment has applied them.
+
+`pnpm check:deployment --strict` is the operator configuration preflight. Run it
+only after injecting the server-side `AGENTCARGO_REGISTRY_URL`,
+`AGENTCARGO_WEB_PROVIDER_BROKER_URL`, `AGENTCARGO_WEB_PROVIDER_BROKER_TOKEN`,
+and `AGENTCARGO_CLI_RELEASE_PRIVATE_KEY` values from the deployment's protected
+configuration store. It validates URL safety, credential presence, Ed25519 key
+shape, and the checked-in migration inventory without printing secret values.
+It does not contact the registry, PostgreSQL, object storage, or provider broker;
+`--allow-loopback` is available only for explicitly local/staging checks.
 
 The anonymous CLI status view is available for operator checks and automation:
 

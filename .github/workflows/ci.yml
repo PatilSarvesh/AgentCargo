@@ -27,4 +27,5 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify
       - run: pnpm test:migrations
+      - run: pnpm test:deployment
       - run: pnpm check:beta

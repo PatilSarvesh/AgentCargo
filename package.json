@@ -15,6 +15,8 @@
     "verify": "pnpm check && pnpm test",
     "check:migrations": "node scripts/check-migrations.mjs --strict",
     "test:migrations": "node --test scripts/check-migrations.test.mjs",
+    "check:deployment": "node scripts/check-deployment.mjs --strict",
+    "test:deployment": "node --test scripts/check-deployment.test.mjs",
     "check:beta": "pnpm check:migrations && node scripts/check-beta-readiness.mjs --strict",
     "test:beta": "pnpm test:migrations && node --test scripts/check-beta-readiness.test.mjs",
     "dev:cli": "pnpm build && node packages/cli/dist/index.js",

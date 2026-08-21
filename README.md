@@ -18,6 +18,7 @@ Requirements: Node.js 22 or newer and pnpm 11.
 pnpm install
 pnpm verify
 pnpm check:migrations
+pnpm test:deployment
 pnpm check:beta
 
 # Create a skill in a new directory

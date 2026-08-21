@@ -84,9 +84,11 @@
       "requiredPaths": [
         "package.json",
         "scripts/check-migrations.mjs",
-        "scripts/check-migrations.test.mjs"
+        "scripts/check-migrations.test.mjs",
+        "scripts/check-deployment.mjs",
+        "scripts/check-deployment.test.mjs"
       ],
-      "requiredPackageScripts": ["verify", "check:migrations", "test:migrations", "check:beta"],
+      "requiredPackageScripts": ["verify", "check:migrations", "test:migrations", "check:deployment", "test:deployment", "check:beta"],
       "statusEvidence": "Full workspace verification PASS"
     },
     {
