@@ -9,12 +9,24 @@ import type {
   RegistryArtifactUploadResponse,
   RegistryAuthCredential,
   RegistryAuthSession,
+  RegistryAuthSessionMetadataResponse,
   RegistryAuthSessionRequest,
   RegistryAuthSessionResponse,
   RegistryDeclaredMetadata,
   RegistryFindingSummary,
   RegistryPackageSummary,
+  RegistryModerationAuditEventListRequest,
+  RegistryModerationAuditEventListResponse,
   RegistryPublisherIdentity,
+  RegistryPublisherWorkspaceResponse,
+  RegistryReport,
+  RegistryReportRequest,
+  RegistryDigestDenylistEntry,
+  RegistryDigestDenylistMutationRequest,
+  RegistryDigestDenylistMutationResponse,
+  RegistryDigestDenylistResponse,
+  RegistryReleaseModerationRequest,
+  RegistryReleaseModerationResponse,
   RegistryRelease,
   RegistryReleaseCompletionRequest,
   RegistryReleaseCompletionResponse,
@@ -24,6 +36,7 @@ import type {
   RegistryReleaseReservationRequest,
   RegistryScanSummary,
   RegistrySessionScope,
+  RegistryStatusResponse,
   RegistrySearchRequest,
   RegistrySearchResponse,
 } from "./index.js";
@@ -127,12 +140,219 @@ export function validateRegistryAuthSessionResponse(input: unknown): RegistryVal
   return validationResult(input, issues);
 }
 
+export function validateRegistryAuthSessionMetadataResponse(input: unknown): RegistryValidationResult<RegistryAuthSessionMetadataResponse> {
+  const issues: RegistryValidationIssue[] = [];
+  const value = asRecord(input, "$", issues);
+  if (value) {
+    exactKeys(value, ["apiVersion", "session"], ["apiVersion", "session"], "$", issues);
+    apiVersionField(value, "$.apiVersion", issues);
+    validateAuthSessionMetadata(value.session, "$.session", issues);
+  }
+  return validationResult(input, issues);
+}
+
+export function validateRegistryStatusResponse(input: unknown): RegistryValidationResult<RegistryStatusResponse> {
+  const issues: RegistryValidationIssue[] = [];
+  const value = asRecord(input, "$", issues);
+  if (value) {
+    exactKeys(value, ["apiVersion", "generatedAt", "overall", "components"], ["apiVersion", "generatedAt", "overall", "components"], "$", issues);
+    apiVersionField(value, "$.apiVersion", issues);
+    stringField(value, "generatedAt", "$.generatedAt", issues, { dateTime: true });
+    enumField(value, "overall", "$.overall", ["operational", "degraded", "outage"], issues);
+    const components = asRecord(value.components, "$.components", issues);
+    if (components) {
+      exactKeys(components, ["api", "database", "storage", "worker", "moderation"], ["api", "database", "storage", "worker", "moderation"], "$.components", issues);
+      validateStatusComponent(components.api, "$.components.api", issues);
+      validateStatusComponent(components.database, "$.components.database", issues);
+      validateStatusComponent(components.storage, "$.components.storage", issues);
+      validateStatusWorkerComponent(components.worker, "$.components.worker", issues);
+      validateStatusModerationComponent(components.moderation, "$.components.moderation", issues);
+    }
+  }
+  return validationResult(input, issues);
+}
+
 export function validateRegistryAuthSessionRequest(input: unknown): RegistryValidationResult<RegistryAuthSessionRequest> {
   const issues: RegistryValidationIssue[] = [];
   const value = asRecord(input, "$", issues);
   if (value) {
     exactKeys(value, ["scopes"], [], "$", issues);
     optionalEnumStringArrayField(value, "scopes", "$.scopes", ["publisher:read", "publisher:write"], issues);
+  }
+  return validationResult(input, issues);
+}
+
+export function validateRegistryPublisherWorkspaceResponse(input: unknown): RegistryValidationResult<RegistryPublisherWorkspaceResponse> {
+  const issues: RegistryValidationIssue[] = [];
+  const value = asRecord(input, "$", issues);
+  if (value) {
+    exactKeys(value, ["apiVersion", "namespaces"], ["apiVersion", "namespaces"], "$", issues);
+    apiVersionField(value, "$.apiVersion", issues);
+    const namespaces = value.namespaces;
+    if (!Array.isArray(namespaces)) {
+      issue(issues, "$.namespaces", "TYPE_INVALID", "Expected an array.");
+    } else {
+      if (namespaces.length > 100) issue(issues, "$.namespaces", "ARRAY_TOO_LARGE", "Expected at most 100 namespaces.");
+      const seen = new Set<string>();
+      namespaces.forEach((namespace, index) => {
+        validatePublisherNamespace(namespace, `$.namespaces[${index}]`, issues);
+        if (typeof namespace === "object" && namespace !== null && !Array.isArray(namespace)) {
+          const name = (namespace as Record<string, unknown>).namespace;
+          if (typeof name === "string") {
+            if (seen.has(name)) issue(issues, `$.namespaces[${index}].namespace`, "DUPLICATE_VALUE", "Namespaces must be unique.");
+            seen.add(name);
+          }
+        }
+      });
+    }
+  }
+  return validationResult(input, issues);
+}
+
+export function validateRegistryReportRequest(input: unknown): RegistryValidationResult<RegistryReportRequest> {
+  const issues: RegistryValidationIssue[] = [];
+  const value = asRecord(input, "$", issues);
+  if (value) {
+    exactKeys(value, ["target", "category", "evidence", "idempotencyKey"], ["target", "category", "evidence", "idempotencyKey"], "$", issues);
+    validateReportTarget(value.target, "$.target", issues);
+    enumField(value, "category", "$.category", ["malware", "impersonation", "spam", "copyright", "policy", "other"], issues);
+    stringField(value, "evidence", "$.evidence", issues, { minLength: 1, maxLength: 4096, noControlCharacters: true });
+    stringField(value, "idempotencyKey", "$.idempotencyKey", issues, { minLength: 1, maxLength: 128, noControlCharacters: true });
+  }
+  return validationResult(input, issues);
+}
+
+export function validateRegistryReport(input: unknown): RegistryValidationResult<RegistryReport> {
+  const issues: RegistryValidationIssue[] = [];
+  const value = asRecord(input, "$", issues);
+  if (value) {
+    exactKeys(value, ["apiVersion", "reportId", "target", "category", "status", "evidence", "createdAt", "updatedAt"], ["apiVersion", "reportId", "target", "category", "status", "evidence", "createdAt", "updatedAt"], "$", issues);
+    apiVersionField(value, "$.apiVersion", issues);
+    stringField(value, "reportId", "$.reportId", issues, { minLength: 1, maxLength: 128, noControlCharacters: true });
+    validateReportTarget(value.target, "$.target", issues);
+    enumField(value, "category", "$.category", ["malware", "impersonation", "spam", "copyright", "policy", "other"], issues);
+    enumField(value, "status", "$.status", ["open", "triaged", "resolved", "dismissed"], issues);
+    stringField(value, "evidence", "$.evidence", issues, { minLength: 1, maxLength: 4096, noControlCharacters: true });
+    stringField(value, "createdAt", "$.createdAt", issues, { dateTime: true });
+    stringField(value, "updatedAt", "$.updatedAt", issues, { dateTime: true });
+  }
+  return validationResult(input, issues);
+}
+
+export function validateRegistryReleaseModerationRequest(input: unknown): RegistryValidationResult<RegistryReleaseModerationRequest> {
+  const issues: RegistryValidationIssue[] = [];
+  const value = asRecord(input, "$", issues);
+  if (value) {
+    exactKeys(value, ["reason", "idempotencyKey"], ["reason", "idempotencyKey"], "$", issues);
+    stringField(value, "reason", "$.reason", issues, { minLength: 1, maxLength: 512, noControlCharacters: true });
+    stringField(value, "idempotencyKey", "$.idempotencyKey", issues, { minLength: 1, maxLength: 128, noControlCharacters: true });
+  }
+  return validationResult(input, issues);
+}
+
+export function validateRegistryReleaseModerationResponse(input: unknown): RegistryValidationResult<RegistryReleaseModerationResponse> {
+  const issues: RegistryValidationIssue[] = [];
+  const value = asRecord(input, "$", issues);
+  if (value) {
+    exactKeys(value, ["apiVersion", "coordinate", "operation", "status", "changedAt", "auditEventId"], ["apiVersion", "coordinate", "operation", "status", "changedAt", "auditEventId"], "$", issues);
+    apiVersionField(value, "$.apiVersion", issues);
+    validateReleaseCoordinate(value.coordinate, "$.coordinate", issues);
+    enumField(value, "operation", "$.operation", ["deprecate", "quarantine", "unquarantine"], issues);
+    enumField(value, "status", "$.status", ["active", "deprecated", "quarantined"], issues);
+    stringField(value, "changedAt", "$.changedAt", issues, { dateTime: true });
+    stringField(value, "auditEventId", "$.auditEventId", issues, { minLength: 1, maxLength: 128, noControlCharacters: true });
+    if (value.operation === "deprecate" && value.status !== "deprecated") issue(issues, "$.status", "STATE_INVALID", "Deprecation must produce a deprecated release.");
+    if (value.operation === "quarantine" && value.status !== "quarantined") issue(issues, "$.status", "STATE_INVALID", "Quarantine must produce a quarantined release.");
+    if (value.operation === "unquarantine" && value.status === "quarantined") issue(issues, "$.status", "STATE_INVALID", "Unquarantine must restore a public release status.");
+  }
+  return validationResult(input, issues);
+}
+
+export function validateRegistryDigestDenylistEntry(input: unknown): RegistryValidationResult<RegistryDigestDenylistEntry> {
+  const issues: RegistryValidationIssue[] = [];
+  const value = asRecord(input, "$", issues);
+  if (value) {
+    exactKeys(value, ["digest", "reason", "addedAt"], ["digest", "reason", "addedAt"], "$", issues);
+    stringField(value, "digest", "$.digest", issues, { digest: true });
+    stringField(value, "reason", "$.reason", issues, { minLength: 1, maxLength: 512, noControlCharacters: true });
+    stringField(value, "addedAt", "$.addedAt", issues, { dateTime: true });
+  }
+  return validationResult(input, issues);
+}
+
+export function validateRegistryDigestDenylistResponse(input: unknown): RegistryValidationResult<RegistryDigestDenylistResponse> {
+  const issues: RegistryValidationIssue[] = [];
+  const value = asRecord(input, "$", issues);
+  if (value) {
+    exactKeys(value, ["apiVersion", "items"], ["apiVersion", "items"], "$", issues);
+    apiVersionField(value, "$.apiVersion", issues);
+    if (!Array.isArray(value.items)) {
+      issue(issues, "$.items", "TYPE_INVALID", "Expected an array.");
+    } else {
+      if (value.items.length > 1000) issue(issues, "$.items", "ARRAY_TOO_LARGE", "Expected at most 1000 denylist entries.");
+      value.items.forEach((item, index) => {
+        const result = validateRegistryDigestDenylistEntry(item);
+        if (!result.valid) issues.push(...result.issues.map((entry) => ({ ...entry, path: `$.items[${index}]${entry.path.slice(1)}` })));
+      });
+    }
+  }
+  return validationResult(input, issues);
+}
+
+export function validateRegistryDigestDenylistMutationRequest(input: unknown): RegistryValidationResult<RegistryDigestDenylistMutationRequest> {
+  const issues: RegistryValidationIssue[] = [];
+  const value = asRecord(input, "$", issues);
+  if (value) {
+    exactKeys(value, ["action", "digest", "reason", "idempotencyKey"], ["action", "digest", "reason", "idempotencyKey"], "$", issues);
+    enumField(value, "action", "$.action", ["add", "remove"], issues);
+    stringField(value, "digest", "$.digest", issues, { digest: true });
+    stringField(value, "reason", "$.reason", issues, { minLength: 1, maxLength: 512, noControlCharacters: true });
+    stringField(value, "idempotencyKey", "$.idempotencyKey", issues, { minLength: 1, maxLength: 128, noControlCharacters: true });
+  }
+  return validationResult(input, issues);
+}
+
+export function validateRegistryDigestDenylistMutationResponse(input: unknown): RegistryValidationResult<RegistryDigestDenylistMutationResponse> {
+  const issues: RegistryValidationIssue[] = [];
+  const value = asRecord(input, "$", issues);
+  if (value) {
+    exactKeys(value, ["apiVersion", "action", "digest", "active", "changedAt", "auditEventId"], ["apiVersion", "action", "digest", "active", "changedAt", "auditEventId"], "$", issues);
+    apiVersionField(value, "$.apiVersion", issues);
+    enumField(value, "action", "$.action", ["add", "remove"], issues);
+    stringField(value, "digest", "$.digest", issues, { digest: true });
+    booleanField(value, "active", "$.active", issues);
+    stringField(value, "changedAt", "$.changedAt", issues, { dateTime: true });
+    stringField(value, "auditEventId", "$.auditEventId", issues, { minLength: 1, maxLength: 128, noControlCharacters: true });
+    if (value.action === "add" && value.active !== true) issue(issues, "$.active", "STATE_INVALID", "Adding a digest must leave it active on the denylist.");
+    if (value.action === "remove" && value.active !== false) issue(issues, "$.active", "STATE_INVALID", "Removing a digest must leave it inactive on the denylist.");
+  }
+  return validationResult(input, issues);
+}
+
+export function validateRegistryModerationAuditEventListRequest(input: unknown): RegistryValidationResult<RegistryModerationAuditEventListRequest> {
+  const issues: RegistryValidationIssue[] = [];
+  const value = asRecord(input, "$", issues);
+  if (value) {
+    exactKeys(value, ["cursor", "limit"], [], "$", issues);
+    optionalStringField(value, "cursor", "$.cursor", issues, { minLength: 1, maxLength: 512 });
+    optionalIntegerField(value, "limit", "$.limit", issues, 1, 100);
+  }
+  return validationResult(input, issues);
+}
+
+export function validateRegistryModerationAuditEventListResponse(input: unknown): RegistryValidationResult<RegistryModerationAuditEventListResponse> {
+  const issues: RegistryValidationIssue[] = [];
+  const value = asRecord(input, "$", issues);
+  if (value) {
+    exactKeys(value, ["apiVersion", "items", "nextCursor"], ["apiVersion", "items"], "$", issues);
+    apiVersionField(value, "$.apiVersion", issues);
+    if (!Array.isArray(value.items)) {
+      issue(issues, "$.items", "TYPE_INVALID", "Expected an array.");
+    } else {
+      if (value.items.length > 100) issue(issues, "$.items", "ARRAY_TOO_LARGE", "Expected at most 100 audit events.");
+      value.items.forEach((item, index) => validateModerationAuditEvent(item, `$.items[${index}]`, issues));
+    }
+    optionalStringField(value, "nextCursor", "$.nextCursor", issues, { minLength: 1, maxLength: 512 });
   }
   return validationResult(input, issues);
 }
@@ -320,6 +540,164 @@ function validateAuthSession(input: unknown, path: string, issues: RegistryValid
   enumStringArrayField(value, "scopes", `${path}.scopes`, ["publisher:read", "publisher:write"] satisfies readonly RegistrySessionScope[], issues);
 }
 
+function validateAuthSessionMetadata(input: unknown, path: string, issues: RegistryValidationIssue[]): void {
+  const value = asRecord(input, path, issues);
+  if (!value) return;
+  exactKeys(value, ["expiresAt", "scopes"], ["expiresAt", "scopes"], path, issues);
+  stringField(value, "expiresAt", `${path}.expiresAt`, issues, { dateTime: true });
+  enumStringArrayField(value, "scopes", `${path}.scopes`, ["publisher:read", "publisher:write"] satisfies readonly RegistrySessionScope[], issues);
+}
+
+function validatePublisherNamespace(input: unknown, path: string, issues: RegistryValidationIssue[]): void {
+  const value = asRecord(input, path, issues);
+  if (!value) return;
+  exactKeys(value, ["namespace", "packages"], ["namespace", "packages"], path, issues);
+  stringField(value, "namespace", `${path}.namespace`, issues, { pattern: /^[a-z0-9]+(?:-[a-z0-9]+)*$/, maxLength: 64 });
+  if (!Array.isArray(value.packages)) {
+    issue(issues, `${path}.packages`, "TYPE_INVALID", "Expected an array.");
+    return;
+  }
+  if (value.packages.length > 1_000) issue(issues, `${path}.packages`, "ARRAY_TOO_LARGE", "Expected at most 1000 packages.");
+  const seen = new Set<string>();
+  value.packages.forEach((item, index) => {
+    validatePublisherPackage(item, `${path}.packages[${index}]`, issues);
+    if (typeof item === "object" && item !== null && !Array.isArray(item)) {
+      const coordinate = (item as Record<string, unknown>).package;
+      if (typeof coordinate === "object" && coordinate !== null && !Array.isArray(coordinate)) {
+        const name = (coordinate as Record<string, unknown>).name;
+        if (typeof name === "string") {
+          if (seen.has(name)) issue(issues, `${path}.packages[${index}].package.name`, "DUPLICATE_VALUE", "Package names must be unique within a namespace.");
+          seen.add(name);
+        }
+      }
+    }
+  });
+}
+
+function validatePublisherPackage(input: unknown, path: string, issues: RegistryValidationIssue[]): void {
+  const value = asRecord(input, path, issues);
+  if (!value) return;
+  exactKeys(value, ["package", "latestVersion", "releases"], ["package", "releases"], path, issues);
+  validatePackageCoordinate(value.package, `${path}.package`, issues);
+  optionalStringField(value, "latestVersion", `${path}.latestVersion`, issues, { semver: true });
+  if (!Array.isArray(value.releases)) {
+    issue(issues, `${path}.releases`, "TYPE_INVALID", "Expected an array.");
+    return;
+  }
+  if (value.releases.length > 10_000) issue(issues, `${path}.releases`, "ARRAY_TOO_LARGE", "Expected at most 10000 releases.");
+  const seen = new Set<string>();
+  value.releases.forEach((release, index) => {
+    validatePublisherRelease(release, `${path}.releases[${index}]`, issues);
+    if (typeof release === "object" && release !== null && !Array.isArray(release)) {
+      const version = (release as Record<string, unknown>).version;
+      if (typeof version === "string") {
+        if (seen.has(version)) issue(issues, `${path}.releases[${index}].version`, "DUPLICATE_VALUE", "Release versions must be unique.");
+        seen.add(version);
+      }
+    }
+  });
+}
+
+function validatePublisherRelease(input: unknown, path: string, issues: RegistryValidationIssue[]): void {
+  const value = asRecord(input, path, issues);
+  if (!value) return;
+  exactKeys(
+    value,
+    ["releaseId", "version", "status", "createdAt", "expiresAt", "digest", "completedAt", "publishedAt"],
+    ["releaseId", "version", "status", "createdAt", "expiresAt"],
+    path,
+    issues,
+  );
+  stringField(value, "releaseId", `${path}.releaseId`, issues, { minLength: 1, maxLength: 128, noControlCharacters: true });
+  stringField(value, "version", `${path}.version`, issues, { semver: true });
+  enumField(value, "status", `${path}.status`, ["reserved", "expired", "uploading", "uploaded", "scanning", "active", "deprecated", "quarantined", "rejected"], issues);
+  stringField(value, "createdAt", `${path}.createdAt`, issues, { dateTime: true });
+  stringField(value, "expiresAt", `${path}.expiresAt`, issues, { dateTime: true });
+  optionalStringField(value, "digest", `${path}.digest`, issues, { digest: true });
+  optionalStringField(value, "completedAt", `${path}.completedAt`, issues, { dateTime: true });
+  optionalStringField(value, "publishedAt", `${path}.publishedAt`, issues, { dateTime: true });
+}
+
+function validateReportTarget(input: unknown, path: string, issues: RegistryValidationIssue[]): void {
+  const value = asRecord(input, path, issues);
+  if (!value) return;
+  exactKeys(value, ["package", "releaseVersion"], ["package"], path, issues);
+  validatePackageCoordinate(value.package, `${path}.package`, issues);
+  optionalStringField(value, "releaseVersion", `${path}.releaseVersion`, issues, { semver: true });
+}
+
+function validateModerationAuditEvent(input: unknown, path: string, issues: RegistryValidationIssue[]): void {
+  const value = asRecord(input, path, issues);
+  if (!value) return;
+  exactKeys(value, ["eventId", "action", "actor", "target", "occurredAt", "requestId", "metadata"], ["eventId", "action", "actor", "target", "occurredAt", "requestId", "metadata"], path, issues);
+  stringField(value, "eventId", `${path}.eventId`, issues, { minLength: 1, maxLength: 128, noControlCharacters: true });
+  enumField(value, "action", `${path}.action`, [
+    "report_created", "report_triaged", "report_resolved", "report_dismissed",
+    "release_deprecated", "release_quarantined", "release_unquarantined",
+    "digest_denylisted", "digest_denylist_removed",
+  ], issues);
+  validateModerationActor(value.actor, `${path}.actor`, issues);
+  validateModerationAuditTarget(value.target, `${path}.target`, issues);
+  stringField(value, "occurredAt", `${path}.occurredAt`, issues, { dateTime: true });
+  stringField(value, "requestId", `${path}.requestId`, issues, { minLength: 1, maxLength: 128, noControlCharacters: true });
+  validateAuditMetadata(value.metadata, `${path}.metadata`, issues);
+}
+
+function validateModerationActor(input: unknown, path: string, issues: RegistryValidationIssue[]): void {
+  const value = asRecord(input, path, issues);
+  if (!value) return;
+  exactKeys(value, ["kind", "identity"], ["kind"], path, issues);
+  enumField(value, "kind", `${path}.kind`, ["publisher", "maintainer", "system"], issues);
+  if (value.kind === "system") {
+    if (Object.hasOwn(value, "identity")) issue(issues, `${path}.identity`, "UNKNOWN_FIELD", "System actors must not include an identity.");
+  } else if (!Object.hasOwn(value, "identity")) {
+    issue(issues, `${path}.identity`, "REQUIRED", "Authenticated actors must include an identity.");
+  } else {
+    validatePublisherIdentity(value.identity, `${path}.identity`, issues);
+  }
+}
+
+function validateModerationAuditTarget(input: unknown, path: string, issues: RegistryValidationIssue[]): void {
+  const value = asRecord(input, path, issues);
+  if (!value) return;
+  if (value.type === "report") {
+    exactKeys(value, ["type", "reportId"], ["type", "reportId"], path, issues);
+    stringField(value, "reportId", `${path}.reportId`, issues, { minLength: 1, maxLength: 128, noControlCharacters: true });
+    return;
+  }
+  if (value.type === "package") {
+    exactKeys(value, ["type", "package"], ["type", "package"], path, issues);
+    validatePackageCoordinate(value.package, `${path}.package`, issues);
+    return;
+  }
+  if (value.type === "release") {
+    exactKeys(value, ["type", "release"], ["type", "release"], path, issues);
+    validateReleaseCoordinate(value.release, `${path}.release`, issues);
+    return;
+  }
+  if (value.type === "artifact") {
+    exactKeys(value, ["type", "digest"], ["type", "digest"], path, issues);
+    stringField(value, "digest", `${path}.digest`, issues, { digest: true });
+    return;
+  }
+  enumField(value, "type", `${path}.type`, ["report", "package", "release", "artifact"], issues);
+}
+
+function validateAuditMetadata(input: unknown, path: string, issues: RegistryValidationIssue[]): void {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    issue(issues, path, "TYPE_INVALID", "Expected an object.");
+    return;
+  }
+  const entries = Object.entries(input as Record<string, unknown>);
+  if (entries.length > 32) issue(issues, path, "OBJECT_TOO_LARGE", "Expected at most 32 metadata fields.");
+  for (const [key, value] of entries) {
+    if (!/^[A-Za-z0-9_.-]{1,64}$/.test(key)) issue(issues, `${path}.${key}`, "KEY_INVALID", "Metadata keys must be bounded ASCII names.");
+    if (typeof value !== "string" || value.length < 1 || value.length > 512 || /[\u0000-\u001f\u007f]/.test(value)) {
+      issue(issues, `${path}.${key}`, "VALUE_INVALID", "Metadata values must be bounded strings without control characters.");
+    }
+  }
+}
+
 function validateRelease(input: unknown, path: string, issues: RegistryValidationIssue[]): void {
   const value = asRecord(input, path, issues);
   if (!value) return;
@@ -497,6 +875,55 @@ function validateTags(input: unknown, path: string, issues: RegistryValidationIs
       tags.add(tag);
     }
   });
+}
+
+function validateStatusComponent(input: unknown, path: string, issues: RegistryValidationIssue[], additionalKeys: readonly string[] = []): void {
+  const value = asRecord(input, path, issues);
+  if (!value) return;
+  exactKeys(value, ["status", "checkedAt", "detail", ...additionalKeys], ["status", "checkedAt"], path, issues);
+  enumField(value, "status", `${path}.status`, ["operational", "degraded", "unavailable", "not_configured"], issues);
+  stringField(value, "checkedAt", `${path}.checkedAt`, issues, { dateTime: true });
+  optionalStringField(value, "detail", `${path}.detail`, issues, { minLength: 1, maxLength: 256, noControlCharacters: true });
+}
+
+function validateStatusWorkerComponent(input: unknown, path: string, issues: RegistryValidationIssue[]): void {
+  const value = asRecord(input, path, issues);
+  if (!value) return;
+  exactKeys(
+    value,
+    ["status", "checkedAt", "detail", "ready", "reason", "totalRuns", "claimedJobs", "consecutiveFailures", "lastRunAgeMs", "queue"],
+    ["status", "checkedAt", "ready", "reason", "totalRuns", "claimedJobs", "consecutiveFailures", "lastRunAgeMs", "queue"],
+    path,
+    issues,
+  );
+  validateStatusComponent(value, path, issues, ["ready", "reason", "totalRuns", "claimedJobs", "consecutiveFailures", "lastRunAgeMs", "queue"]);
+  booleanField(value, "ready", `${path}.ready`, issues);
+  stringField(value, "reason", `${path}.reason`, issues, { minLength: 1, maxLength: 64, noControlCharacters: true });
+  integerField(value, "totalRuns", `${path}.totalRuns`, issues, 0);
+  integerField(value, "claimedJobs", `${path}.claimedJobs`, issues, 0);
+  integerField(value, "consecutiveFailures", `${path}.consecutiveFailures`, issues, 0);
+  if (value.lastRunAgeMs !== null) integerField(value, "lastRunAgeMs", `${path}.lastRunAgeMs`, issues, 0);
+  if (value.queue !== null) validateStatusQueue(value.queue, `${path}.queue`, issues);
+}
+
+function validateStatusModerationComponent(input: unknown, path: string, issues: RegistryValidationIssue[]): void {
+  const value = asRecord(input, path, issues);
+  if (!value) return;
+  exactKeys(value, ["status", "checkedAt", "detail", "activeDenylistEntries"], ["status", "checkedAt", "activeDenylistEntries"], path, issues);
+  validateStatusComponent(value, path, issues, ["activeDenylistEntries"]);
+  if (value.activeDenylistEntries !== null) integerField(value, "activeDenylistEntries", `${path}.activeDenylistEntries`, issues, 0);
+}
+
+function validateStatusQueue(input: unknown, path: string, issues: RegistryValidationIssue[]): void {
+  const value = asRecord(input, path, issues);
+  if (!value) return;
+  exactKeys(value, ["queued", "failed", "running", "staleLeases", "oldestAvailableAt", "lagMs"], ["queued", "failed", "running", "staleLeases", "oldestAvailableAt", "lagMs"], path, issues);
+  integerField(value, "queued", `${path}.queued`, issues, 0);
+  integerField(value, "failed", `${path}.failed`, issues, 0);
+  integerField(value, "running", `${path}.running`, issues, 0);
+  integerField(value, "staleLeases", `${path}.staleLeases`, issues, 0);
+  if (value.oldestAvailableAt !== null) stringField(value, "oldestAvailableAt", `${path}.oldestAvailableAt`, issues, { dateTime: true });
+  integerField(value, "lagMs", `${path}.lagMs`, issues, 0);
 }
 
 function asRecord(input: unknown, path: string, issues: RegistryValidationIssue[]): Record<string, unknown> | undefined {

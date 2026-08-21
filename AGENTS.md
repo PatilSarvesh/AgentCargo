@@ -90,6 +90,8 @@ Launch with approximately 5-10 maintained skills such as code review, test writi
 
 Starter skills are recommended in onboarding but are never silently installed. Users explicitly select them or install a starter collection.
 
+The maintained public-beta seed set currently contains ten instruction-only fixtures under `examples/starter-skills/`, with catalog metadata in `catalog.json`. Every seed fixture must validate and static-scan cleanly for both Codex and Claude Code before it is presented as curated; local catalog recommendations remain opt-in until immutable registry releases exist.
+
 ## Trust model
 
 Never describe a skill as completely safe merely because static checks passed. Do not use unsupported scores such as `Security 98/100`.
@@ -143,6 +145,7 @@ The source standard is <https://agentskills.io/specification>. Host-specific con
 - Static scanning only in MVP; community files are never executed by registry workers.
 - Published artifacts are mirrored, immutable, content-addressed, and digest-verified.
 - Artifact format v1 is the uncompressed canonical USTAR format `agentcargo-ustar-v1`, stored with the `.agentcargo` extension and hashed over its exact bytes.
+- CLI beta releases use the separate deterministic `agentcargo-cli-ustar-v1` bundle produced by `scripts/release-cli.mjs`; its canonical manifest inventories the built CLI/runtime package set and is signed with an operator-supplied Ed25519 key. Private keys remain outside the repository, and package-registry publication/key custody remain deployment work.
 - Host behavior lives behind `@agentcargo/adapter-contract`; the first adapter is `@agentcargo/adapter-codex` version `0.1.0`.
 - Codex project skills install to `<project-root>/.agents/skills/<name>` and user skills to `<user-home>/.agents/skills/<name>`, verified against official OpenAI documentation on 2026-08-13.
 - Claude Code is the selected second host. Its adapter ID is `claude-code` and package is `@agentcargo/adapter-claude-code` version `0.1.0`; project skills install to `<project-root>/.claude/skills/<name>` and user skills to `<user-home>/.claude/skills/<name>`, verified against official Anthropic documentation on 2026-08-13.
@@ -158,11 +161,20 @@ The source standard is <https://agentskills.io/specification>. Host-specific con
 - Updates and rollbacks share the scope operation lock, require clean receipt-owned trees, stage on the destination filesystem, use atomic directory swaps, and restore the prior directory plus lockfile after commit failures.
 - Successful updates retain one validated rollback receipt and backup per package in `.agentcargo-rollback.json`; rollback swaps the retained and active versions so the operation is itself reversible, and removal cleans both active and retained owned files.
 - Local audit keeps artifact identity, installed receipt integrity, filesystem drift/path safety, recovery evidence, and versioned static scanner observations separate; it never claims to reverify source-artifact bytes that are not retained locally and never follows or executes installed content.
-- Publishing API boundaries receive authenticated, namespace-authorized publisher context from injected middleware. The API exposes generic bearer/cookie resolver boundaries, provider-to-registry session exchange, hosted GitHub start/callback routes, signed artifact-upload URL issuance, and upload completion into the scanning state; it does not validate GitHub OAuth tokens or own provider sessions. Release-version reservation and upload state are publisher-scoped, idempotent, and durably persisted; worker validation and public activation remain separate steps.
-- CLI credentials use a canonical registry URL key and a permission-restricted atomic local store; tokens never enter lockfiles, command arguments, or command output. `GitHubOAuthClient` supports PKCE authorization requests, device-flow login, identity revalidation, and refresh-token rotation. `GitHubHostedOAuthFlow` composes PKCE code exchange with one-time redirect-bound state, and `GitHubPublisherTokenVerifier` adapts `/user` identity checks to the API boundary. In-memory and PostgreSQL session/state adapters retain only bounded opaque session digests and transient callback material. Registry sessions carry bounded `publisher:read`/`publisher:write` claims, and scoped mutation resolvers reject sessions without publisher-write access. The local web app exposes a fail-closed `/api/registry-session` status boundary, an injected server-only resolver/exchange seam, server-only opaque-cookie inspection, and explicit cookie revocation; its default bridge remains unset, accepts no browser provider credentials, and returns no registry token until a real host resolver is composed. OS keychain integration and deployment wiring remain pending.
-- Authenticated local `agentcargo publish` composes validated deterministic packing, publisher-scoped reservation, signed artifact upload, completion, and token-redacted status output; browser publication and publisher UI remain pending.
+- Publishing API boundaries receive authenticated, namespace-authorized publisher context from injected middleware. The API exposes generic bearer/cookie resolver boundaries, provider-to-registry session exchange, token-free session introspection, an owner-scoped publisher workspace read, hosted GitHub start/callback routes, signed artifact-upload URL issuance, and upload completion into the scanning state; it does not validate GitHub OAuth tokens or own provider sessions. Release-version reservation and upload state are publisher-scoped, idempotent, and durably persisted; worker validation and public activation remain separate steps.
+- CLI credentials use a canonical registry URL key and a permission-restricted atomic local store; tokens never enter lockfiles, command arguments, or command output. `GitHubOAuthClient` supports PKCE authorization requests, device-flow login, identity revalidation, and refresh-token rotation. `GitHubHostedOAuthFlow` composes PKCE code exchange with one-time redirect-bound state, and `GitHubPublisherTokenVerifier` adapts `/user` identity checks to the API boundary. In-memory and PostgreSQL session/state adapters retain only bounded opaque session digests and transient callback material. Registry sessions carry bounded `publisher:read`/`publisher:write` claims, and scoped mutation resolvers reject sessions without publisher-write access. The local web app exposes a fail-closed `/api/registry-session` boundary and uses a server-only, environment-configured host broker to resolve provider credentials, request exactly `publisher:read`, store only an opaque HttpOnly registry cookie, and inspect it through token-free registry metadata. Missing or unsafe configuration remains fail-closed; browser credentials and tokens never cross the JSON boundary. OS keychain integration and hosted publisher deployment remain pending.
+- Authenticated CLI publication uses the stored GitHub credential only for a just-in-time session exchange. `agentcargo publish` requests exactly `publisher:write`, keeps the short-lived AgentCargo session in memory, rejects expired or differently scoped sessions, and sends only that registry session to release mutation endpoints.
+- Authenticated local `agentcargo publish` composes validated deterministic packing, publisher-scoped reservation, signed artifact upload, completion, and token-redacted status output. The authenticated publisher UI performs only the server-derived, intent-only reservation handoff; browser package-file upload and activation remain pending.
+- Reports use bounded authenticated submissions with publisher-scoped idempotency; migration `0008_registry_moderation.sql` persists reports and append-only moderation audit events. `POST /v1/reports` is reporter-authenticated, `GET /v1/admin/audit-events` is maintainer-authenticated, and audit metadata never contains report evidence or credentials.
+- Release moderation uses migration `0009_release_moderation.sql`: publisher-write deprecation requires namespace ownership, maintainer quarantine/restoration requires an injected maintainer role, quarantine remembers the prior public status, and every transition is idempotent and append-only audited. Anonymous package/search/exact-release reads filter quarantined rows while maintainer audit history remains addressable.
+- Emergency digest denylisting uses migration `0010_digest_denylist.sql`: only maintainer-scoped add/remove mutations are accepted, each change is idempotent and append-only audited, and active `sha256:` entries are checked before public release reads, worker activation, and artifact resolution. Denylist state is content-addressed, bounded, and fail-closed at each trust boundary; removal restores eligibility without rewriting historical events.
+- Worker activation requires an injected digest-denylist reader; `RegistryReleaseWorker` and `PostgresRegistryReleaseScanRepository` refuse construction without it and treat reader outages as retryable failures before download/activation. The focused review and residual risks are recorded in `docs/SECURITY_REVIEW_2026-08-20.md`.
+- Continuous scanning uses `RegistryReleaseWorkerScheduler`: bounded intervals, immediate first cycle, no overlapping claims, queue-only lag/counter health, consecutive-failure readiness, and graceful lease-aware `stop()` are enforced in the worker package. The scheduler never exposes package bytes or credentials; PostgreSQL `available_at`/lease recovery remains authoritative for retries and stale claims.
+- Public operational status uses the versioned `GET /v1/status` contract and `/status` web page. API/database, artifact-storage, worker, and moderation signals are injected as bounded callbacks; `registryWorkerStatusSource` adapts scheduler readiness and queue counters without package contents, credentials, or raw errors. Required-boundary outages report `overall: "outage"`; optional control failures report `degraded`.
+- Registry API abuse controls use an injectable `RegistryRateLimiter`: auth, search, reporting, publishing, and moderation routes have bounded route-aware fixed-window policies, stable `429`/`Retry-After` responses, and generic fail-closed `503` behavior when the limiter is unavailable. The default in-memory limiter is hard-bounded for local/single-process use; multi-instance deployments must provide shared state. Operator response procedures live in `docs/INCIDENT_RUNBOOK.md`.
+- Local web dev/preview uses `AGENTCARGO_WEB_PORT` through `apps/web/scripts/run-vinext.mjs`; explicit `--port` flags take precedence, so AgentCargo can move off localhost:3000 without changing another project's port or shared configuration.
 - The anonymous web catalog includes a local-only instruction-skill builder that generates reviewable `SKILL.md` and `agentcargo.yaml` drafts plus a CLI handoff; browser pages never upload package files or install them directly.
-- The local `/publisher` workspace is read-only and uses optional workspace identity headers only for display; identity alone never grants namespace authorization, and authenticated browser publication remains a follow-up boundary.
+- The authenticated `/publisher` workspace reads owner-scoped namespaces, packages, and immutable release histories through an exact `publisher:read` AgentCargo session. Its publication intent form accepts only name/version/idempotency input, derives the namespace server-side, exchanges a one-shot `publisher:write` session in memory, and reserves a release without accepting browser package files or returning credentials; artifact upload, scanning, and activation remain CLI/registry-bound.
 
 ## Current repository structure
 
@@ -189,6 +201,10 @@ docs/ARCHITECTURE.md Technical architecture and security boundaries
 docs/ROADMAP.md      Milestone sequence
 docs/THREAT_MODEL.md Local and planned hosted security boundaries
 docs/STATUS.md       Current implementation status and next work
+docs/BETA_READINESS.json Machine-readable public-beta launch gates
+docs/BETA_LAUNCH.md Controlled public-beta deployment handoff
+docs/BETA_FEEDBACK.md Creator/user feedback and measurement template
+docs/BETA_METRICS.json PRD beta metric definitions and record template
 CONTRIBUTING.md      Contribution workflow and change requirements
 SECURITY.md          Private vulnerability-reporting policy
 LICENSE              Apache License 2.0 terms
@@ -207,6 +223,7 @@ agentcargo list --agent <codex|claude-code> --scope <project|user|all>
 agentcargo remove <package> --agent <codex|claude-code> --scope <project|user> --yes
 agentcargo doctor --agent <codex|claude-code> --scope <project|user|all>
 agentcargo search <query> [--registry <url>]
+agentcargo status [--registry <url>]
 agentcargo inspect <@namespace/name[@version]> [--registry <url>]
 agentcargo update [@namespace/name[@version]] --agent <codex|claude-code> --scope <project|user> [--dry-run|--yes] [--registry <url>]
 agentcargo rollback <package> --agent <codex|claude-code> --scope <project|user> --yes
@@ -217,7 +234,7 @@ agentcargo auth refresh [--registry <url>] [--client-id <id>]
 agentcargo auth logout [--registry <url>]
 ```
 
-These commands support the current local workflow, versioned static observations, anonymous registry reads, digest-verified public registry installation, GitHub device-flow auth login/refresh, and authenticated local publication with machine-readable `--json` output. Set `AGENTCARGO_REGISTRY_URL` instead of passing `--registry`; hosted publisher UI and the other commands documented in the PRD remain proposals until listed as completed in `docs/STATUS.md`.
+These commands support the current local workflow, versioned static observations, anonymous registry reads, digest-verified public registry installation, GitHub device-flow auth login/refresh, and authenticated local publication with machine-readable `--json` output. Set `AGENTCARGO_REGISTRY_URL` instead of passing `--registry`; browser package-file publication/activation and the other commands documented in the PRD remain proposals until listed as completed in `docs/STATUS.md`.
 
 ## Development commands
 
@@ -227,6 +244,8 @@ pnpm check
 pnpm test
 pnpm build
 pnpm verify
+pnpm check:beta
+pnpm test:beta
 pnpm dev:cli validate ./examples/hello-skill
 pnpm dev:cli scan ./examples/hello-skill
 pnpm dev:cli pack ./examples/hello-skill

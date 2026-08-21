@@ -1,0 +1,25 @@
+schema_version: 1
+name: react-review
+version: 0.1.0
+description: Review React changes for state behavior, accessibility, performance, and maintainability.
+license: Apache-2.0
+compatibility:
+  codex:
+    scopes:
+      - project
+      - user
+  claude-code:
+    scopes:
+      - project
+      - user
+capabilities:
+  filesystem:
+    read: true
+    write: false
+  shell: false
+  network: false
+  environment: []
+tags:
+  - react
+  - frontend
+  - accessibility

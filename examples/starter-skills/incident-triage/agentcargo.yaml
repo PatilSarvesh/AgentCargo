@@ -1,0 +1,25 @@
+schema_version: 1
+name: incident-triage
+version: 0.1.0
+description: Triage an operational incident into a bounded timeline, impact assessment, containment, and recovery plan.
+license: Apache-2.0
+compatibility:
+  codex:
+    scopes:
+      - project
+      - user
+  claude-code:
+    scopes:
+      - project
+      - user
+capabilities:
+  filesystem:
+    read: true
+    write: false
+  shell: false
+  network: false
+  environment: []
+tags:
+  - operations
+  - incident
+  - reliability

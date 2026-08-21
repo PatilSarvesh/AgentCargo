@@ -346,11 +346,11 @@ The lockfile contains portable relative destinations, never contains credentials
 
 ## 10. Registry services
 
-The versioned public read models, authentication-session contract, and immutable release invariants live in [`@agentcargo/registry-contract`](../packages/registry-contract/src/index.ts). Its checked-in [OpenAPI 3.1 document](../packages/registry-contract/openapi/registry-v1.json) and runtime validators cover the initial anonymous read operations, provider-to-registry session response, and gated release-reservation request/response. The package is deliberately independent of HTTP, PostgreSQL, object storage, authentication providers, and CLI presentation. The boundary and exact lookup semantics are recorded in [ADR 0006](adr/0006-registry-read-path-contract.md).
+The versioned public read models, authentication-session contract, authenticated publisher workspace contract, and immutable release invariants live in [`@agentcargo/registry-contract`](../packages/registry-contract/src/index.ts). Its checked-in [OpenAPI 3.1 document](../packages/registry-contract/openapi/registry-v1.json) and runtime validators cover the initial anonymous read operations, provider-to-registry session response, token-free session introspection, owner-scoped package/version history, and gated release-reservation request/response. The package is deliberately independent of HTTP, PostgreSQL, object storage, authentication providers, and CLI presentation. The boundary and exact lookup semantics are recorded in [ADR 0006](adr/0006-registry-read-path-contract.md).
 
-The first implementation is split into [`@agentcargo/registry-contract`](../packages/registry-contract/src/index.ts), [`@agentcargo/registry-client`](../packages/registry-client/src/index.ts), [`@agentcargo/registry-db`](../packages/registry-db/src/index.ts), [`@agentcargo/registry-storage`](../packages/registry-storage/src/index.ts), [`@agentcargo/registry-api`](../packages/registry-api/src/index.ts), and [`@agentcargo/registry-worker`](../packages/registry-worker/src/index.ts). The contract package owns the versioned public models and validators. The client owns HTTP URL construction, response validation, stable transport errors, anonymous search/package/release lookups, the local credential-store boundary, GitHub PKCE callback flow, and provider identity verification. The database package owns a small `pg`-compatible client surface, parameterized release/package/search queries, public-status filtering, row validation, request-scoped artifact URL creation, release reservations, upload intents, completion metadata, durable scan jobs, and the PostgreSQL session/state-store boundaries. The storage package owns digest verification, content-addressed object keys, immutable writes, signed-download delegation, and signed-upload delegation to an S3-compatible object store. The API package owns Fastify route parsing, response validation, stable error envelopes, cache headers, anonymous read routes, hosted GitHub start/callback/session routes, bearer/cookie publisher resolvers, release reservation, signed upload URL issuance, and upload completion into the scanning state. The worker package claims leased jobs, safely verifies and extracts artifacts into an isolated temporary directory, reuses core validation and static scanning, and calls activation only for matching valid packages; it never executes package files. Authentication and namespace authorization are injected as publisher-context resolvers; provider verification remains in the client adapter and session adapters issue short-lived opaque tokens while retaining only their hashes. The API does not validate GitHub OAuth tokens, own provider sessions, or expose SQL rows/database errors directly.
+The first implementation is split into [`@agentcargo/registry-contract`](../packages/registry-contract/src/index.ts), [`@agentcargo/registry-client`](../packages/registry-client/src/index.ts), [`@agentcargo/registry-db`](../packages/registry-db/src/index.ts), [`@agentcargo/registry-storage`](../packages/registry-storage/src/index.ts), [`@agentcargo/registry-api`](../packages/registry-api/src/index.ts), and [`@agentcargo/registry-worker`](../packages/registry-worker/src/index.ts). The contract package owns the versioned public and publisher-workspace models and validators. The client owns HTTP URL construction, response validation, stable transport errors, anonymous search/package/release lookups, authenticated publisher-workspace lookup, the local credential-store boundary, GitHub PKCE callback flow, and provider identity verification. The database package owns a small `pg`-compatible client surface, parameterized release/package/search and owner-scoped publisher-history queries, public-status filtering, row validation, request-scoped artifact URL creation, release reservations, upload intents, completion metadata, durable scan jobs, and the PostgreSQL session/state-store boundaries. The storage package owns digest verification, content-addressed object keys, immutable writes, signed-download delegation, and signed-upload delegation to an S3-compatible object store. The API package owns Fastify route parsing, response validation, stable error envelopes, cache headers, anonymous read routes, the read-scoped publisher-workspace route, hosted GitHub start/callback/session routes, bearer/cookie publisher resolvers, release reservation, signed upload URL issuance, upload completion into the scanning state, and the public sanitized `/v1/status` response. Status component probes are injected so deployments can connect database, object-store, worker, and moderation checks without exposing package data or raw errors. The worker package claims leased jobs, safely verifies and extracts artifacts into an isolated temporary directory, reuses core validation and static scanning, and calls activation only for matching valid packages; it never executes package files. Authentication and namespace authorization are injected as publisher-context resolvers; provider verification remains in the client adapter and session adapters issue short-lived opaque tokens while retaining only their hashes. The API does not validate GitHub OAuth tokens, own provider sessions, accept browser-selected namespace ownership, or expose SQL rows/database errors directly.
 
-The CLI credential handoff uses [`FileRegistryCredentialStore`](../packages/registry-client/src/auth-store.ts) for explicit registry keys and [`GitHubOAuthClient`](../packages/registry-client/src/github-oauth.ts) for provider communication. The client supports PKCE authorization-request construction, GitHub device authorization, authorization-code exchange for a hosted callback, identity revalidation through `/user`, and refresh-token rotation when GitHub returns expiring credentials. `GitHubHostedOAuthFlow` binds authorization start and callback completion to one-time redirect-bound state, while `GitHubPublisherTokenVerifier` maps GitHub `/user` checks to the API's injected verifier shape. The store validates credentials, writes them atomically with `0700` parent-directory and `0600` file permissions, supports status/login/refresh/logout without printing access tokens, and never writes credentials to `agentcargo.lock`. The API's generic bearer resolver is separately composable with a GitHub verifier or hosted session verifier, and its `/v1/auth/github/start`, `/v1/auth/github/callback`, and `/v1/auth/github/session` routes perform no-store redirects/session exchange. Registry sessions carry a bounded `publisher:read`/`publisher:write` claim set; the scoped cookie resolver and mutation routes enforce `publisher:write` without exposing provider credentials. The API can use the in-memory adapter for local/demo runs or `PostgresRegistrySessionStore` for durable hash-only sessions; `PostgresRegistryOAuthStateStore` provides durable one-time callback state. Upload URL issuance and completion use the `RegistryReleaseUploadRepository` boundary plus an injected artifact-storage adapter; completion records immutable metadata and returns `scanning` without exposing a public release until worker activation. Migration `0006_registry_scan_jobs.sql` adds a durable queue with leases, retries, and scan/rejection evidence, while `0007_registry_session_scopes.sql` persists bounded session claims. The CLI's authenticated local `publish` command now composes reservation, signed upload, and completion through this boundary; web-app session composition, scope selection, and publisher UI remain follow-up work.
+The CLI credential handoff uses [`FileRegistryCredentialStore`](../packages/registry-client/src/auth-store.ts) for explicit registry keys and [`GitHubOAuthClient`](../packages/registry-client/src/github-oauth.ts) for provider communication. The client supports PKCE authorization-request construction, GitHub device authorization, authorization-code exchange for a hosted callback, identity revalidation through `/user`, and refresh-token rotation when GitHub returns expiring credentials. `GitHubHostedOAuthFlow` binds authorization start and callback completion to one-time redirect-bound state, while `GitHubPublisherTokenVerifier` maps GitHub `/user` checks to the API's injected verifier shape. The store validates credentials, writes them atomically with `0700` parent-directory and `0600` file permissions, supports status/login/refresh/logout without printing access tokens, and never writes credentials to `agentcargo.lock`. The API's generic bearer resolver is separately composable with a GitHub verifier or hosted session verifier, and its `/v1/auth/github/start`, `/v1/auth/github/callback`, and `/v1/auth/github/session` routes perform no-store redirects/session exchange. `GET /v1/auth/session` validates an AgentCargo bearer through the injected session store and returns only expiry and scopes, never the token or publisher identity. `GET /v1/publisher/workspace` requires `publisher:read`, derives its publisher identity from that session, and returns the owned namespaces plus reserved/uploaded/scanning/public version history with no browser-supplied namespace selector. Registry sessions carry a bounded `publisher:read`/`publisher:write` claim set; the scoped cookie resolver and mutation routes enforce `publisher:write` without exposing provider credentials. The API can use the in-memory adapter for local/demo runs or `PostgresRegistrySessionStore` for durable hash-only sessions; `PostgresRegistryOAuthStateStore` provides durable one-time callback state. Upload URL issuance and completion use the `RegistryReleaseUploadRepository` boundary plus an injected artifact-storage adapter; completion records immutable metadata and returns `scanning` without exposing a public release until worker activation. Migration `0006_registry_scan_jobs.sql` adds a durable queue with leases, retries, and scan/rejection evidence, while `0007_registry_session_scopes.sql` persists bounded session claims. Before authenticated local publication mutates the registry, the CLI exchanges its stored GitHub credential for a non-persisted, short-lived AgentCargo session requesting exactly `publisher:write`; expired or differently scoped sessions fail closed, and the provider token is never sent to release mutation endpoints. The local web app now also exposes an intent-only `POST /api/publisher-publication` route: it accepts bounded name/version/idempotency input, derives a unique namespace from the read-scoped owner workspace, exchanges a one-shot write-only session in memory, and reserves the release with no-store/no-token output. It never accepts browser package files or a namespace selector; upload, scan, activation, and release mutation authorization remain on the registry/CLI boundary.
 
 ### 10.1 Web application
 
@@ -358,9 +358,10 @@ Responsibilities:
 
 - Server-rendered public search and package pages.
 - Local-only instruction-skill builder that generates reviewable `SKILL.md` and `agentcargo.yaml` drafts plus a CLI handoff; it never uploads files or installs them directly.
-- Read-only publisher workspace shell with an identity-header sign-in gate and local package summaries; identity headers alone never grant namespace authorization or registry mutation rights.
-- Fail-closed `/api/registry-session` status route that reports anonymous or identity-only state, sanitized opaque-session status, and the planned `publisher:read` scope without accepting browser credentials or returning registry tokens.
-- Server-only registry session bridge contract with an injected provider-credential resolver and read-scope exchange; the local default is intentionally unset.
+- Authenticated read-only publisher workspace with an identity-header sign-in gate and registry-backed owner-scoped namespace/package/version histories; identity headers alone never grant namespace authorization or registry mutation rights.
+- Authenticated publication intent handoff that accepts only skill name/version/idempotency input, derives a unique owned namespace server-side, and reserves a reviewable release with a one-shot write-scoped registry session; browser package files are never accepted.
+- Fail-closed `/api/registry-session` status route that reports anonymous or identity-only state, sanitized opaque-session status, and the exact `publisher:read` scope without accepting browser credentials or returning registry tokens.
+- Server-only registry session bridge with a deployable host-provider broker adapter, exact read-scope exchange, and fail-closed environment configuration.
 - GitHub sign-in and publisher settings.
 - Namespace and package management.
 - Scan-result presentation.
@@ -369,15 +370,37 @@ Responsibilities:
 It does not contain registry business rules that the CLI also needs; those live in API/core packages.
 
 The web session bridge in `app/registry-session.ts` accepts a host-owned,
-request-scoped provider resolver and an exchange function. It requests only
-`publisher:read`, validates the returned short-lived session, and the route
-stores only the opaque AgentCargo token in an HttpOnly cookie. When a host also
-provides a server-side session resolver, `GET /api/registry-session` validates
-that cookie and exposes only active/invalid/unavailable metadata; malformed,
-expired, duplicate, or over-scoped cookies fail closed. `DELETE
-/api/registry-session` clears the cookie without requiring provider credentials.
-The checked-in local configuration leaves the bridge unset; workspace identity
-headers are never promoted to provider credentials.
+request-scoped provider resolver and an exchange function. The checked-in
+composition in `app/registry-session-config.ts` activates only when a registry
+URL, provider-broker URL, and server-only broker credential are all configured.
+The trusted broker maps the host-authenticated workspace user ID to a GitHub
+credential over a server-to-server request; browser headers, cookies, and bodies
+are not forwarded. The web adapter requests only `publisher:read`, validates the
+returned short-lived session, and stores only its opaque AgentCargo token in an
+HttpOnly cookie. `GET /api/registry-session` validates that cookie through the
+registry's token-free session-introspection endpoint and exposes only
+active/invalid/unavailable metadata; malformed, expired, duplicate, or
+over-scoped cookies fail closed. `DELETE /api/registry-session` clears the cookie
+without requiring provider credentials. Missing, partial, non-HTTPS (except
+loopback), or invalid deployment settings leave the bridge unset; workspace
+identity headers alone are never promoted to provider credentials.
+
+When the cookie is present, the publisher page calls the server-only workspace
+resolver, which forwards only the opaque session to
+`GET /v1/publisher/workspace`. The registry resolves the publisher identity and
+ownership from its session store, returns bounded immutable release histories,
+and never trusts a namespace or publisher identifier from the browser. The
+publication intent action sends only a bounded name, semantic version, and
+idempotency key to `POST /api/publisher-publication`; the server derives the
+namespace from that owner-scoped workspace, requests exactly `publisher:write`
+from the host broker, and uses the short-lived token only for release
+reservation. The response is no-store metadata without credentials. Invalid,
+expired, unavailable, over-scoped, ambiguous, or structurally invalid responses
+fail closed and no demo publisher data is rendered. Artifact upload, scanning,
+and activation continue through the authenticated CLI/registry workflow. The
+publication route also rejects explicit cross-origin `Origin`/Fetch Metadata
+headers before authentication or body parsing; same-origin browser requests are
+the only mutation requests admitted at the web boundary.
 
 ### 10.2 API
 
@@ -391,7 +414,7 @@ Responsibilities:
 - Reports, quarantine, and audit events.
 - Idempotency enforcement for publishing operations.
 
-The initial routes are implemented in `@agentcargo/registry-api` and use the `@agentcargo/registry-db` repository interface. `GET /v1/auth/github/start` begins a configured PKCE flow, `GET /v1/auth/github/callback` completes one-time state, exchanges the provider credential, and sets a Secure/HttpOnly session cookie, and `POST /v1/auth/github/session` exchanges a provider-verified GitHub bearer credential for a short-lived opaque AgentCargo session; all three auth responses are `Cache-Control: no-store`. The callback can be backed by the PostgreSQL session/state stores after applying migrations `0003_registry_auth_sessions.sql` and `0004_registry_oauth_state.sql`. `GET /v1/search`, `GET /v1/packages/:namespace/:name`, and `GET /v1/packages/:namespace/:name/versions/:version` provide anonymous reads. The exact release route returns only active or deprecated releases; quarantine filtering remains a repository/API boundary concern. The gated `POST /v1/packages/:namespace/:name/releases` route validates a publisher context and reservation request; `POST /v1/releases/:releaseId/upload-url` creates a digest-bound signed upload URL, and `POST /v1/releases/:releaseId/complete` verifies the immutable object metadata and records completion in `scanning` state. Applying migrations `0005_registry_release_uploads.sql` and `0006_registry_scan_jobs.sql` supplies durable upload intent, completion metadata, and the worker queue. The local web app's `/api/registry-session` route is intentionally separate: it exposes only sanitized identity/session status, rejects browser-supplied provider credentials, and its checked-in configuration returns `501` until a request-scoped server provider resolver is composed.
+The initial routes are implemented in `@agentcargo/registry-api` and use the `@agentcargo/registry-db` repository interface. `GET /v1/auth/github/start` begins a configured PKCE flow, `GET /v1/auth/github/callback` completes one-time state, exchanges the provider credential, and sets a Secure/HttpOnly session cookie, `POST /v1/auth/github/session` exchanges a provider-verified GitHub bearer credential for a short-lived opaque AgentCargo session, and `GET /v1/auth/session` returns only token-free expiry/scope metadata for an active AgentCargo bearer; all auth responses are `Cache-Control: no-store`. The callback and introspection route can be backed by the PostgreSQL session/state stores after applying migrations `0003_registry_auth_sessions.sql` and `0004_registry_oauth_state.sql`. `GET /v1/status` is an anonymous, short-cache response containing only the API/database/storage/worker/moderation status contract; required-boundary failures surface as `outage`, while optional control failures surface as `degraded`. `GET /v1/publisher/workspace` is a no-store authenticated read that requires `publisher:read` and uses `PostgresRegistryPublisherWorkspaceRepository` to derive namespace ownership from the resolved session identity. `GET /v1/search`, `GET /v1/packages/:namespace/:name`, and `GET /v1/packages/:namespace/:name/versions/:version` provide anonymous reads. The exact release route returns only active or deprecated releases and overlays the mutable public status while filtering quarantined rows; package/search reads require at least one non-quarantined release and an active digest-denylist exclusion. The gated `POST /v1/packages/:namespace/:name/releases` route validates a publisher context and reservation request; `POST /v1/releases/:releaseId/upload-url` creates a digest-bound signed upload URL, and `POST /v1/releases/:releaseId/complete` verifies the immutable object metadata and records completion in `scanning` state. `POST /v1/reports` accepts a bounded, idempotent authenticated report, while `GET /v1/admin/audit-events` exposes only bounded append-only events to an injected maintainer context; publisher deprecation and maintainer quarantine/restoration routes use the same guarded moderation repository, no-store responses, and idempotent transition keys. `GET /v1/security/denylist` returns only active SHA-256 entries, and `POST /v1/admin/security/denylist` provides maintainer-only idempotent add/remove mutations with bounded reasons; active entries are also checked by the scan worker before activation and by artifact resolution before signed downloads. Applying migrations `0005_registry_release_uploads.sql`, `0006_registry_scan_jobs.sql`, `0008_registry_moderation.sql`, `0009_release_moderation.sql`, and `0010_digest_denylist.sql` supplies durable upload intent, completion metadata, the worker queue, bounded report storage, append-only audit events, guarded release status transitions, and the emergency denylist. The local web app's `/api/registry-session` route is intentionally separate from the registry API, and `/api/publisher-publication` is an intent-only server boundary: it derives ownership from the read-scoped workspace, requests exactly `publisher:write` for one reservation, rejects browser namespace/files, returns no-store metadata without tokens, and leaves upload/scan/activation to the registry/CLI workflow. Both routes expose only sanitized failures and fail closed until their server-only deployment settings are configured.
 
 Suggested route groups:
 
@@ -400,6 +423,7 @@ GET    /v1/search
 GET    /v1/packages/:namespace/:name
 GET    /v1/packages/:namespace/:name/versions
 GET    /v1/packages/:namespace/:name/versions/:version
+GET    /v1/publisher/workspace
 POST   /v1/packages
 POST   /v1/packages/:namespace/:name/releases
 POST   /v1/releases/:releaseId/upload-url
@@ -408,9 +432,12 @@ GET    /v1/releases/:releaseId/artifact
 POST   /v1/reports
 POST   /v1/admin/releases/:releaseId/quarantine
 GET    /v1/security/denylist
+POST   /v1/admin/security/denylist
 ```
 
 All mutation endpoints accept an idempotency key. Error responses include a stable code, human message, field-level details when relevant, and request ID.
+
+Rate limiting is route-aware and injectable through `RegistryRateLimiter`. Authentication, search, reporting, publishing, and moderation paths use bounded fixed-window policies; allowed responses expose `RateLimit-Limit`, `RateLimit-Remaining`, and `RateLimit-Reset`, while rejected responses use stable `429 REGISTRY_RATE_LIMITED` errors with `Retry-After`. The default process-local limiter has a hard key bound and is appropriate for local/single-process operation. A production deployment spanning multiple instances must provide a shared limiter, and limiter failures fail closed for mutation paths with a generic `503`.
 
 ### 10.3 Worker
 
@@ -433,6 +460,25 @@ extracts only canonical regular files, compares the extracted manifest and file 
 with the publisher completion metadata, and persists either bounded rejection evidence or
 an active release candidate through `PostgresRegistryReleaseScanRepository`. The worker
 uses no credentials available to uploaded code and never executes package files.
+
+`RegistryReleaseWorkerScheduler` provides the continuous process boundary around that
+single-cycle worker. It validates a bounded interval, schedules the first claim
+immediately, never overlaps cycles, and lets the active lease-owning run finish before
+`stop()` returns; no new claim starts after draining begins. Worker failures and retryable
+job outcomes are tracked with a consecutive-failure threshold while the loop continues
+so PostgreSQL's `available_at` retry policy remains authoritative. Optional queue counters
+(`queued`, `failed`, `running`, `staleLeases`, and oldest available time) are read from
+`PostgresRegistryScanJobRepository` without selecting package content. The scheduler
+exposes sanitized `health()` and `readiness()` snapshots with run age, dispatch lag,
+duration, claim count, queue lag, and bounded failure reasons. A deployment can publish
+these snapshots through its own health endpoint; neither package bytes nor credentials
+are included.
+
+Worker activation requires an injected digest-denylist reader. Both the worker
+orchestrator and PostgreSQL activation repository refuse construction without
+that boundary and fail before artifact download/activation if the reader is
+unavailable; a denylist outage remains a retryable job failure rather than an
+implicit allow.
 
 ## 11. Publication state machine
 
@@ -504,6 +550,7 @@ Core tables:
 - `manifest_json`
 - `published_by`
 - `published_at`
+- `quarantine_previous_status` (nullable `active`/`deprecated` state retained only while quarantined)
 - Unique: `(package_id, version)`
 - Unique: `artifact_digest` may be non-unique across packages if identical content is permitted; storage can still deduplicate by digest.
 
@@ -545,8 +592,15 @@ Core tables:
 
 ### `reports` and `audit_events`
 
-- Reports contain category, reporter, package/release, status, and bounded evidence.
-- Audit events are append-only and record actor, action, target, timestamp, request ID, and safe metadata.
+- `registry_reports` contains a publisher-scoped idempotency key, category, reporter identity, package/release target, lifecycle status, bounded evidence, and timestamps.
+- `registry_moderation_audit_events` is append-only at the database boundary and records actor, action, target, timestamp, request ID, and safe bounded metadata; update/delete attempts are rejected by a trigger.
+- Report evidence is never copied into audit metadata, and audit reads are maintainer-authorized rather than public.
+
+### `digest_denylist`
+
+- `registry_digest_denylist` stores normalized `sha256:` digests, bounded reasons, active state, and add/update timestamps; the digest is the primary key and the active index keeps public checks bounded.
+- Add/remove mutations are maintainer-authorized, idempotent, and append an immutable moderation event without storing credentials or package contents.
+- Public release/package/search reads, signed artifact resolution, and worker activation reject active denylisted digests. Removing an entry only changes current eligibility; the audit history remains immutable.
 
 ## 13. Search architecture
 
@@ -638,6 +692,7 @@ Minimum signals:
 - API request count, latency, and error codes.
 - Publish funnel by validation outcome.
 - Queue age, attempts, and dead-letter count.
+- Worker scheduler readiness, run age, dispatch lag, duration, claimed-job count, queue counters, stale leases, and queue lag.
 - Artifact upload/download failures and digest mismatches.
 - Install failures by CLI, OS, host, adapter, and stable error code.
 - Quarantine propagation age.
@@ -651,7 +706,7 @@ Initial deployment:
 
 - One web deployment.
 - One API deployment with at least two instances when public traffic begins.
-- One worker process with bounded concurrency.
+- One worker process running `RegistryReleaseWorkerScheduler` with a bounded interval and graceful lease-aware shutdown; scale-out relies on PostgreSQL lease claims rather than overlapping local cycles.
 - Managed PostgreSQL with point-in-time recovery.
 - S3-compatible private bucket behind signed URLs or a controlled download endpoint.
 - CDN for public web assets and immutable package artifacts after authorization policy is applied.

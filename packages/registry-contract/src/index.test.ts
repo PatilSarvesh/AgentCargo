@@ -14,15 +14,26 @@ import {
   validateRegistryArtifactUploadResponse,
   validateRegistryAuthCredential,
   validateRegistryAuthSessionRequest,
+  validateRegistryAuthSessionMetadataResponse,
   validateRegistryAuthSession,
   validateRegistryAuthSessionResponse,
+  validateRegistryModerationAuditEventListResponse,
   validateRegistryPublisherIdentity,
+  validateRegistryPublisherWorkspaceResponse,
+  validateRegistryReport,
+  validateRegistryReportRequest,
+  validateRegistryDigestDenylistMutationRequest,
+  validateRegistryDigestDenylistMutationResponse,
+  validateRegistryDigestDenylistResponse,
+  validateRegistryReleaseModerationRequest,
+  validateRegistryReleaseModerationResponse,
   validateRegistryReleaseReservation,
   validateRegistryReleaseReservationRequest,
   validateRegistryReleaseCompletionRequest,
   validateRegistryReleaseCompletionResponse,
   validateRegistryReleaseLookupResponse,
   validateRegistrySearchRequest,
+  validateRegistryStatusResponse,
 } from "./index.js";
 
 describe("registry read contract", () => {
@@ -99,6 +110,33 @@ describe("registry read contract", () => {
       apiVersion: "v1",
       error: { code: "NOT_FOUND", message: "Not found", requestId: "req-1" },
     })).toMatchObject({ valid: true });
+  });
+
+  it("validates sanitized operational status signals", () => {
+    const response = {
+      apiVersion: "v1" as const,
+      generatedAt: "2026-08-20T00:00:00.000Z",
+      overall: "degraded" as const,
+      components: {
+        api: { status: "operational" as const, checkedAt: "2026-08-20T00:00:00.000Z" },
+        database: { status: "operational" as const, checkedAt: "2026-08-20T00:00:00.000Z", detail: "Repository ready" },
+        storage: { status: "not_configured" as const, checkedAt: "2026-08-20T00:00:00.000Z" },
+        worker: {
+          status: "degraded" as const,
+          checkedAt: "2026-08-20T00:00:00.000Z",
+          ready: false,
+          reason: "queue-lag",
+          totalRuns: 4,
+          claimedJobs: 3,
+          consecutiveFailures: 1,
+          lastRunAgeMs: 1200,
+          queue: { queued: 2, failed: 0, running: 1, staleLeases: 0, oldestAvailableAt: "2026-08-20T00:00:00.000Z", lagMs: 1800 },
+        },
+        moderation: { status: "operational" as const, checkedAt: "2026-08-20T00:00:00.000Z", activeDenylistEntries: 1 },
+      },
+    };
+    expect(validateRegistryStatusResponse(response)).toMatchObject({ valid: true });
+    expect(validateRegistryStatusResponse({ ...response, components: { ...response.components, worker: { ...response.components.worker, reason: "x".repeat(65) } } }).valid).toBe(false);
   });
 
   it("validates publisher identity and idempotent release reservations", () => {
@@ -190,6 +228,14 @@ describe("registry read contract", () => {
     } as const;
     expect(validateRegistryAuthSession(session)).toMatchObject({ valid: true });
     expect(validateRegistryAuthSessionResponse({ apiVersion: "v1", session })).toMatchObject({ valid: true });
+    expect(validateRegistryAuthSessionMetadataResponse({
+      apiVersion: "v1",
+      session: { expiresAt: session.expiresAt, scopes: ["publisher:read"] },
+    })).toMatchObject({ valid: true });
+    expect(validateRegistryAuthSessionMetadataResponse({
+      apiVersion: "v1",
+      session: { accessToken: "must-not-cross-introspection", expiresAt: session.expiresAt, scopes: ["publisher:read"] },
+    }).valid).toBe(false);
     const invalid = validateRegistryAuthSessionResponse({
       apiVersion: "v1",
       session: { ...session, identity: { provider: "github", subject: "\u0000" } },
@@ -200,6 +246,96 @@ describe("registry read contract", () => {
     expect(invalidScopes.valid).toBe(false);
     expect(validateRegistryAuthSessionRequest({ scopes: ["publisher:read"] })).toMatchObject({ valid: true });
     expect(validateRegistryAuthSessionRequest({ scopes: ["publisher:admin"] }).valid).toBe(false);
+  });
+
+  it("validates authenticated publisher package and immutable version histories", () => {
+    const workspace = {
+      apiVersion: "v1",
+      namespaces: [{
+        namespace: "acme",
+        packages: [{
+          package: { namespace: "acme", name: "review" },
+          latestVersion: "1.0.0",
+          releases: [{
+            releaseId: "release-1",
+            version: "1.0.0",
+            status: "active",
+            createdAt: "2026-08-15T00:00:00.000Z",
+            expiresAt: "2026-08-15T00:30:00.000Z",
+            digest: `sha256:${"a".repeat(64)}`,
+            completedAt: "2026-08-15T00:01:00.000Z",
+            publishedAt: "2026-08-15T00:02:00.000Z",
+          }],
+        }],
+      }],
+    };
+    expect(validateRegistryPublisherWorkspaceResponse(workspace)).toMatchObject({ valid: true });
+    expect(validateRegistryPublisherWorkspaceResponse({
+      ...workspace,
+      namespaces: [workspace.namespaces[0], workspace.namespaces[0]],
+    }).valid).toBe(false);
+    expect(validateRegistryPublisherWorkspaceResponse({
+      ...workspace,
+      namespaces: [{ ...workspace.namespaces[0], packages: [{
+        ...workspace.namespaces[0]!.packages[0],
+        releases: [{ ...workspace.namespaces[0]!.packages[0]!.releases[0], status: "draft" }],
+      }] }],
+    }).valid).toBe(false);
+  });
+
+  it("validates bounded reports and maintainer audit events", () => {
+    const report = {
+      apiVersion: "v1" as const,
+      reportId: "report-1",
+      target: { package: { namespace: "acme", name: "review" }, releaseVersion: "1.2.3" },
+      category: "malware" as const,
+      status: "open" as const,
+      evidence: "The release attempts an untrusted download.",
+      createdAt: "2026-08-15T00:00:00.000Z",
+      updatedAt: "2026-08-15T00:00:00.000Z",
+    };
+    expect(validateRegistryReportRequest({ target: report.target, category: report.category, evidence: report.evidence, idempotencyKey: "report-1" })).toMatchObject({ valid: true });
+    expect(validateRegistryReport(report)).toMatchObject({ valid: true });
+    expect(validateRegistryReportRequest({ ...report, evidence: "x".repeat(4097) }).valid).toBe(false);
+    expect(validateRegistryReleaseModerationRequest({ reason: "The release is unsafe.", idempotencyKey: "moderate-1" })).toMatchObject({ valid: true });
+    expect(validateRegistryReleaseModerationResponse({
+      apiVersion: "v1",
+      coordinate: { namespace: "acme", name: "review", version: "1.2.3" },
+      operation: "quarantine",
+      status: "quarantined",
+      changedAt: "2026-08-15T00:00:00.000Z",
+      auditEventId: "event-quarantine-1",
+    })).toMatchObject({ valid: true });
+    expect(validateRegistryReleaseModerationRequest({ reason: "x".repeat(513), idempotencyKey: "moderate-1" }).valid).toBe(false);
+    const digest = `sha256:${"d".repeat(64)}`;
+    expect(validateRegistryDigestDenylistMutationRequest({ action: "add", digest, reason: "Emergency block.", idempotencyKey: "deny-1" })).toMatchObject({ valid: true });
+    expect(validateRegistryDigestDenylistMutationResponse({ apiVersion: "v1", action: "add", digest, active: true, changedAt: "2026-08-15T00:00:00.000Z", auditEventId: "event-deny-1" })).toMatchObject({ valid: true });
+    expect(validateRegistryDigestDenylistResponse({ apiVersion: "v1", items: [{ digest, reason: "Emergency block.", addedAt: "2026-08-15T00:00:00.000Z" }] })).toMatchObject({ valid: true });
+    expect(validateRegistryDigestDenylistMutationRequest({ action: "add", digest: "sha256:invalid", reason: "x", idempotencyKey: "deny-1" }).valid).toBe(false);
+    expect(validateRegistryModerationAuditEventListResponse({
+      apiVersion: "v1",
+      items: [{
+        eventId: "event-1",
+        action: "report_created",
+        actor: { kind: "publisher", identity: { provider: "github", subject: "publisher-1" } },
+        target: { type: "report", reportId: "report-1" },
+        occurredAt: "2026-08-15T00:00:00.000Z",
+        requestId: "req-1",
+        metadata: { category: "malware", targetType: "release" },
+      }],
+    })).toMatchObject({ valid: true });
+    expect(validateRegistryModerationAuditEventListResponse({
+      apiVersion: "v1",
+      items: [{
+        eventId: "event-1",
+        action: "report_created",
+        actor: { kind: "publisher", identity: { provider: "github", subject: "publisher-1" } },
+        target: { type: "report", reportId: "report-1" },
+        occurredAt: "2026-08-15T00:00:00.000Z",
+        requestId: "req-1",
+        metadata: { evidence: "x".repeat(513) },
+      }],
+    }).valid).toBe(false);
   });
 
   it("ships an OpenAPI 3.1 document for reads, reservation, upload, and completion", async () => {
@@ -214,6 +350,16 @@ describe("registry read contract", () => {
       "/v1/auth/github/start",
       "/v1/auth/github/callback",
       "/v1/auth/github/session",
+      "/v1/auth/session",
+      "/v1/status",
+      "/v1/publisher/workspace",
+      "/v1/reports",
+      "/v1/admin/audit-events",
+      "/v1/packages/{namespace}/{name}/versions/{version}/deprecate",
+      "/v1/admin/packages/{namespace}/{name}/versions/{version}/quarantine",
+      "/v1/admin/packages/{namespace}/{name}/versions/{version}/unquarantine",
+      "/v1/security/denylist",
+      "/v1/admin/security/denylist",
       "/v1/search",
       "/v1/packages/{namespace}/{name}",
       "/v1/packages/{namespace}/{name}/versions/{version}",
@@ -224,6 +370,13 @@ describe("registry read contract", () => {
     expect(document.components.schemas.RegistryApiVersion!.const).toBe("v1");
     expect(document.components.schemas.RegistryAuthSession!.required).toEqual(["accessToken", "tokenType", "expiresAt", "identity", "scopes"]);
     expect(document.components.schemas.RegistryAuthSessionResponse!.required).toEqual(["apiVersion", "session"]);
+    expect(document.components.schemas.RegistryAuthSessionMetadata!.required).toEqual(["expiresAt", "scopes"]);
+    expect(document.components.schemas.RegistryStatusResponse!.required).toEqual(["apiVersion", "generatedAt", "overall", "components"]);
+    expect(document.components.schemas.RegistryPublisherWorkspaceResponse!.required).toEqual(["apiVersion", "namespaces"]);
+    expect(document.components.schemas.RegistryReport!.required).toEqual(["apiVersion", "reportId", "target", "category", "status", "evidence", "createdAt", "updatedAt"]);
+    expect(document.components.schemas.RegistryReleaseModerationResponse!.required).toEqual(["apiVersion", "coordinate", "operation", "status", "changedAt", "auditEventId"]);
+    expect(document.components.schemas.RegistryDigestDenylistMutationResponse!.required).toEqual(["apiVersion", "action", "digest", "active", "changedAt", "auditEventId"]);
+    expect(document.components.schemas.RegistryModerationAuditEventListResponse!.required).toEqual(["apiVersion", "items"]);
     expect(document.components.schemas.RegistryReleaseLookupResponse!.required).toEqual(["apiVersion", "release"]);
     expectUnresolvedInternalReferences(document);
   });

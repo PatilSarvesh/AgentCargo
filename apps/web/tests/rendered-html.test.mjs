@@ -26,12 +26,26 @@ test("server-renders the AgentCargo catalog", async () => {
   assert.match(html, /Find the right skill for the work/);
   assert.match(html, /Skills worth knowing/);
   assert.match(html, /patch-review/);
+  assert.match(html, /code-review/);
+  assert.match(html, /sql-review/);
+  assert.match(html, /AgentCargo Maintainers/);
   assert.match(html, /Version history/);
   assert.match(html, /1\.3\.0/);
   assert.match(html, /Immutable artifact/);
   assert.match(html, /Install with AgentCargo/);
   assert.match(html, /href="\/publish"/);
   assert.doesNotMatch(html, /Your site is taking shape|codex-preview|react-loading-skeleton/i);
+});
+
+test("server-renders the public status boundary", async () => {
+  const response = await render("/status");
+  assert.equal(response.status, 200);
+
+  const html = await response.text();
+  assert.match(html, /Public operational status/);
+  assert.match(html, /Current status/);
+  assert.match(html, /Status exposes bounded counters/);
+  assert.doesNotMatch(html, /password|access_token|refresh_token|Bearer /i);
 });
 
 test("server-renders the local skill builder without a hosted publish dependency", async () => {
@@ -54,11 +68,11 @@ test("gates the publisher workspace without identity headers", async () => {
   assert.match(html, /Publisher workspace/);
   assert.match(html, /Sign in to manage releases/);
   assert.match(html, /Sign in with ChatGPT/);
-  assert.match(html, /identity alone does not grant namespace access/);
-  assert.match(html, /Read-only session boundary/);
-  assert.match(html, /A workspace identity is not available yet/);
+  assert.match(html, /identity alone never grants namespace access/);
+  assert.match(html, /Publisher read session/);
+  assert.match(html, /Sign in before requesting a read-scoped registry session/);
   assert.match(html, /publisher:read/);
-  assert.match(html, /Publisher writes/);
+  assert.match(html, /Version history/);
   assert.doesNotMatch(html, /access_token|refresh_token|Bearer /i);
 });
 
@@ -74,11 +88,11 @@ test("renders a read-only publisher summary from workspace identity headers", as
   const html = await response.text();
   assert.match(html, /Welcome, <em>Ada Lovelace/);
   assert.match(html, /Signed-in identity/);
-  assert.match(html, /patch-review/);
   assert.match(html, /Identity verified by workspace headers/);
-  assert.match(html, /Workspace identity is available for display/);
-  assert.match(html, /Not connected/);
-  assert.match(html, /Never stored or displayed/);
+  assert.match(html, /Request a read-scoped AgentCargo session/);
+  assert.match(html, /Connect registry/);
+  assert.match(html, /No demo publisher data is shown here/);
+  assert.doesNotMatch(html, /@studio\/patch-review|Local workspace records/);
   assert.match(html, /Sign out/);
 });
 

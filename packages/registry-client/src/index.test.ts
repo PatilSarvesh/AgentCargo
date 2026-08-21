@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { RegistryAuthSessionResponse, RegistryPackageSummary, RegistryReleaseLookupResponse, RegistrySearchResponse } from "@agentcargo/registry-contract";
+import type { RegistryAuthSessionResponse, RegistryPackageSummary, RegistryReleaseLookupResponse, RegistrySearchResponse, RegistryStatusResponse } from "@agentcargo/registry-contract";
 import { RegistryClient, RegistryClientError } from "./index.js";
 
 describe("registry client", () => {
@@ -16,6 +16,31 @@ describe("registry client", () => {
 
     await expect(client.search({ query: "react review", host: "codex", scope: "project", limit: 10 })).resolves.toEqual(response);
     expect(requestedUrl).toBe("https://registry.example.test/v1/search?q=react+review&host=codex&scope=project&limit=10");
+  });
+
+  it("loads the public operational status contract without credentials", async () => {
+    const status: RegistryStatusResponse = {
+      apiVersion: "v1",
+      generatedAt: "2026-08-20T00:00:00.000Z",
+      overall: "operational",
+      components: {
+        api: { status: "operational", checkedAt: "2026-08-20T00:00:00.000Z" },
+        database: { status: "operational", checkedAt: "2026-08-20T00:00:00.000Z" },
+        storage: { status: "operational", checkedAt: "2026-08-20T00:00:00.000Z" },
+        worker: { status: "operational", checkedAt: "2026-08-20T00:00:00.000Z", ready: true, reason: "ready", totalRuns: 1, claimedJobs: 0, consecutiveFailures: 0, lastRunAgeMs: 1, queue: null },
+        moderation: { status: "operational", checkedAt: "2026-08-20T00:00:00.000Z", activeDenylistEntries: 0 },
+      },
+    };
+    let requestedUrl = "";
+    const client = new RegistryClient({
+      baseUrl: "https://registry.example.test",
+      fetch: async (input) => {
+        requestedUrl = String(input);
+        return new Response(JSON.stringify(status), { status: 200 });
+      },
+    });
+    await expect(client.getStatus()).resolves.toEqual(status);
+    expect(requestedUrl).toBe("https://registry.example.test/v1/status");
   });
 
   it("resolves package and release paths without accepting path injection", async () => {
@@ -150,6 +175,125 @@ describe("registry client", () => {
     });
 
     await expect(client.exchangeGitHubSession("gh_provider_token")).rejects.toMatchObject({ code: "REGISTRY_AUTH_REQUIRED", status: 401 });
+  });
+
+  it("inspects a registry session without returning the bearer token or identity", async () => {
+    let request: { url: string; init?: RequestInit } | undefined;
+    const client = new RegistryClient({
+      baseUrl: "https://registry.example.test",
+      fetch: async (input, init) => {
+        request = { url: String(input), ...(init ? { init } : {}) };
+        return new Response(JSON.stringify({
+          apiVersion: "v1",
+          session: { expiresAt: "2026-08-15T00:15:00.000Z", scopes: ["publisher:read"] },
+        }), { status: 200 });
+      },
+    });
+
+    await expect(client.inspectSession("acs_registry_session")).resolves.toEqual({
+      expiresAt: "2026-08-15T00:15:00.000Z",
+      scopes: ["publisher:read"],
+    });
+    expect(request?.url).toBe("https://registry.example.test/v1/auth/session");
+    expect(request?.init?.method).toBeUndefined();
+    expect(new Headers(request?.init?.headers).get("authorization")).toBe("Bearer acs_registry_session");
+  });
+
+  it("loads the authenticated publisher workspace with the registry session", async () => {
+    let request: { url: string; init?: RequestInit } | undefined;
+    const workspace = {
+      apiVersion: "v1" as const,
+      namespaces: [{ namespace: "acme", packages: [{
+        package: { namespace: "acme", name: "review" },
+        releases: [{
+          releaseId: "release-1",
+          version: "1.0.0",
+          status: "scanning" as const,
+          createdAt: "2026-08-15T00:00:00.000Z",
+          expiresAt: "2026-08-15T00:30:00.000Z",
+        }],
+      }] }],
+    };
+    const client = new RegistryClient({
+      baseUrl: "https://registry.example.test",
+      fetch: async (input, init) => {
+        request = { url: String(input), ...(init ? { init } : {}) };
+        return new Response(JSON.stringify(workspace));
+      },
+    });
+
+    await expect(client.getPublisherWorkspace("acs_read_session")).resolves.toEqual(workspace);
+    expect(request?.url).toBe("https://registry.example.test/v1/publisher/workspace");
+    expect(new Headers(request?.init?.headers).get("authorization")).toBe("Bearer acs_read_session");
+  });
+
+  it("submits reports and reads moderation audit events with bearer auth", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const report = {
+      apiVersion: "v1" as const,
+      reportId: "report-1",
+      target: { package: { namespace: "acme", name: "review" }, releaseVersion: "1.2.3" },
+      category: "malware" as const,
+      status: "open" as const,
+      evidence: "Suspicious download.",
+      createdAt: "2026-08-15T00:00:00.000Z",
+      updatedAt: "2026-08-15T00:00:00.000Z",
+    };
+    const audit = { apiVersion: "v1" as const, items: [] };
+    const client = new RegistryClient({
+      baseUrl: "https://registry.example.test",
+      fetch: async (input, init) => {
+        calls.push({ url: String(input), ...(init ? { init } : {}) });
+        return new Response(JSON.stringify(String(input).endsWith("/reports") ? report : audit));
+      },
+    });
+    await expect(client.submitReport({ target: report.target, category: report.category, evidence: report.evidence, idempotencyKey: "report-1" }, "acs_report_session")).resolves.toEqual(report);
+    await expect(client.listModerationAuditEvents("acs_maintainer_session", { limit: 10 })).resolves.toEqual(audit);
+    expect(calls[0]!.url).toBe("https://registry.example.test/v1/reports");
+    expect(calls[1]!.url).toBe("https://registry.example.test/v1/admin/audit-events?limit=10");
+    expect(new Headers(calls[0]!.init?.headers).get("authorization")).toBe("Bearer acs_report_session");
+    expect(new Headers(calls[1]!.init?.headers).get("authorization")).toBe("Bearer acs_maintainer_session");
+  });
+
+  it("sends guarded release moderation operations to their scoped routes", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const response = {
+      apiVersion: "v1" as const,
+      coordinate: { namespace: "acme", name: "review", version: "1.2.3" },
+      operation: "quarantine" as const,
+      status: "quarantined" as const,
+      changedAt: "2026-08-15T00:00:00.000Z",
+      auditEventId: "event-1",
+    };
+    const client = new RegistryClient({
+      baseUrl: "https://registry.example.test",
+      fetch: async (input, init) => {
+        calls.push({ url: String(input), ...(init ? { init } : {}) });
+        return new Response(JSON.stringify(response), { status: 201 });
+      },
+    });
+    await expect(client.moderateRelease(response.coordinate, "quarantine", { reason: "Unsafe release.", idempotencyKey: "moderate-1" }, "acs_maintainer_session")).resolves.toEqual(response);
+    expect(calls[0]!.url).toBe("https://registry.example.test/v1/admin/packages/acme/review/versions/1.2.3/quarantine");
+    expect(new Headers(calls[0]!.init?.headers).get("authorization")).toBe("Bearer acs_maintainer_session");
+  });
+
+  it("reads and mutates the emergency digest denylist with validation", async () => {
+    const digest = `sha256:${"d".repeat(64)}` as `sha256:${string}`;
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const entry = { digest, reason: "Emergency block.", addedAt: "2026-08-15T00:00:00.000Z" };
+    const mutation = { apiVersion: "v1" as const, action: "add" as const, digest, active: true, changedAt: "2026-08-15T00:00:00.000Z", auditEventId: "event-1" };
+    const client = new RegistryClient({
+      baseUrl: "https://registry.example.test",
+      fetch: async (input, init) => {
+        calls.push({ url: String(input), ...(init ? { init } : {}) });
+        return new Response(JSON.stringify(String(input).endsWith("/denylist") && init?.method === undefined ? { apiVersion: "v1", items: [entry] } : mutation), { status: 201 });
+      },
+    });
+    await expect(client.listDigestDenylist()).resolves.toEqual({ apiVersion: "v1", items: [entry] });
+    await expect(client.mutateDigestDenylist({ action: "add", digest, reason: "Emergency block.", idempotencyKey: "deny-1" }, "acs_maintainer_session")).resolves.toEqual(mutation);
+    expect(calls[0]!.url).toBe("https://registry.example.test/v1/security/denylist");
+    expect(calls[1]!.url).toBe("https://registry.example.test/v1/admin/security/denylist");
+    expect(new Headers(calls[1]!.init?.headers).get("authorization")).toBe("Bearer acs_maintainer_session");
   });
 
   it("publishes through authenticated reservation, upload, and completion calls without leaking credentials", async () => {

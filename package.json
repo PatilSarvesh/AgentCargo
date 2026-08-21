@@ -13,6 +13,9 @@
     "check": "pnpm --recursive check",
     "test": "pnpm build && pnpm --recursive test",
     "verify": "pnpm check && pnpm test",
-    "dev:cli": "pnpm build && node packages/cli/dist/index.js"
+    "check:beta": "node scripts/check-beta-readiness.mjs --strict",
+    "test:beta": "node --test scripts/check-beta-readiness.test.mjs",
+    "dev:cli": "pnpm build && node packages/cli/dist/index.js",
+    "release:cli": "pnpm build && node scripts/release-cli.mjs"
   }
 }

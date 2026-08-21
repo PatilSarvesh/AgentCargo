@@ -3,6 +3,7 @@ import type { FastifyRequest } from "fastify";
 import { DEFAULT_REGISTRY_SESSION_SCOPES, validateRegistryPublisherIdentity } from "@agentcargo/registry-contract";
 import type {
   RegistryAuthSession,
+  RegistryAuthSessionMetadata,
   RegistryPublisherIdentity,
   RegistryReleaseCoordinate,
   RegistrySessionScope,
@@ -17,10 +18,13 @@ export interface RegistryPublisherContext {
   scopes: readonly RegistrySessionScope[];
 }
 
+export interface RegistrySessionContext extends RegistryPublisherContext, RegistryAuthSessionMetadata {}
+
 export interface RegistrySessionStore {
   issue(identity: RegistryPublisherIdentity, options?: { ttlSeconds?: number; scopes?: readonly RegistrySessionScope[] }): Promise<RegistryAuthSession>;
   resolve(accessToken: string): Promise<RegistryPublisherIdentity | null>;
-  resolveContext(accessToken: string): Promise<RegistryPublisherContext | null>;
+  resolveContext(accessToken: string): Promise<RegistrySessionContext | null>;
+  inspect(accessToken: string): Promise<RegistryAuthSessionMetadata | null>;
   revoke(accessToken: string): Promise<boolean>;
 }
 
@@ -65,7 +69,7 @@ export class InMemoryRegistrySessionStore implements RegistrySessionStore {
     return context?.identity ?? null;
   }
 
-  async resolveContext(accessToken: string): Promise<RegistryPublisherContext | null> {
+  async resolveContext(accessToken: string): Promise<RegistrySessionContext | null> {
     const key = safeToken(accessToken);
     if (!key) return null;
     const entry = this.#sessions.get(hashToken(key));
@@ -74,7 +78,16 @@ export class InMemoryRegistrySessionStore implements RegistrySessionStore {
       this.#sessions.delete(hashToken(key));
       return null;
     }
-    return { identity: cloneIdentity(entry.identity), scopes: [...entry.scopes] };
+    return {
+      identity: cloneIdentity(entry.identity),
+      expiresAt: new Date(entry.expiresAt).toISOString(),
+      scopes: [...entry.scopes],
+    };
+  }
+
+  async inspect(accessToken: string): Promise<RegistryAuthSessionMetadata | null> {
+    const context = await this.resolveContext(accessToken);
+    return context ? { expiresAt: context.expiresAt, scopes: [...context.scopes] } : null;
   }
 
   async revoke(accessToken: string): Promise<boolean> {

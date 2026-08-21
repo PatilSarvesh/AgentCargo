@@ -31,7 +31,7 @@ type PackageSummary = {
   versions: VersionSummary[];
 };
 
-const demoPackages: PackageSummary[] = [
+const demoPackagesBase: PackageSummary[] = [
   {
     namespace: "studio",
     name: "patch-review",
@@ -91,6 +91,36 @@ const demoPackages: PackageSummary[] = [
     ],
   },
 ];
+
+const starterPackages: PackageSummary[] = [
+  ["code-review", "Review code changes for correctness, maintainability, and delivery risk.", ["code-review", "quality"], "coral"],
+  ["test-writing", "Design focused tests that protect behavior and make failures easy to diagnose.", ["testing", "quality"], "blue"],
+  ["documentation", "Turn implementation details into clear documentation for users and maintainers.", ["documentation", "writing"], "mustard"],
+  ["security-review", "Inspect a change for trust boundaries, abuse cases, and actionable security findings.", ["security", "review"], "coral"],
+  ["git-pr-assistance", "Prepare focused Git changes and pull requests with useful context and verification notes.", ["git", "pull-request"], "blue"],
+  ["react-review", "Review React changes for state behavior, accessibility, performance, and maintainability.", ["react", "frontend", "accessibility"], "mustard"],
+  ["backend-api-review", "Review backend API changes for contracts, validation, authorization, and compatibility.", ["backend", "api", "security"], "coral"],
+  ["sql-review", "Review SQL and database changes for correctness, migration safety, query behavior, and data integrity.", ["database", "sql", "migration"], "blue"],
+  ["incident-triage", "Triage an operational incident into a bounded timeline, impact assessment, containment, and recovery plan.", ["operations", "incident", "reliability"], "mustard"],
+  ["dependency-review", "Review dependency changes for compatibility, maintenance risk, license obligations, and supply-chain exposure.", ["dependencies", "supply-chain", "maintenance"], "coral"],
+].map(([name, description, tags, accent]) => ({
+  namespace: "agentcargo",
+  name,
+  description,
+  latestVersion: "0.1.0",
+  tags,
+  compatibility: { codex: ["project", "user"], "claude-code": ["project", "user"] },
+  hasScripts: false,
+  publisher: "AgentCargo Maintainers",
+  accent,
+  files: ["SKILL.md", "agentcargo.yaml"],
+  observed: ["Maintained starter fixture", "No executable files", "No network references"],
+  findings: 0,
+  digest: "sha256:starter-fixture",
+  versions: [{ version: "0.1.0", status: "active", publishedAt: "Starter catalog", findings: 0, digest: "sha256:starter-fixture" }],
+}));
+
+const demoPackages: PackageSummary[] = [...demoPackagesBase, ...starterPackages];
 
 const registryUrl = process.env.NEXT_PUBLIC_AGENTCARGO_REGISTRY_URL;
 
@@ -172,6 +202,7 @@ export default function Home() {
         <nav className="top-nav" aria-label="Primary navigation">
           <a className="active" href="#explore">Explore</a>
           <a href="#trust">Trust model</a>
+          <a href="/status">Status</a>
           <a href="#docs">Docs</a>
         </nav>
         <a className="quiet-button" href="/publish">Publish a skill <span aria-hidden="true">↗</span></a>
@@ -250,7 +281,7 @@ export default function Home() {
         </div>
       </section>
 
-      <footer className="footer" id="docs"><span>AgentCargo <span className="footer-muted">· Know exactly what you are trusting.</span></span><span className="footer-links"><a href="#trust">Trust model</a><a href="https://agentskills.io/specification">Agent Skills spec ↗</a></span></footer>
+      <footer className="footer" id="docs"><span>AgentCargo <span className="footer-muted">· Know exactly what you are trusting.</span></span><span className="footer-links"><a href="#trust">Trust model</a><a href="/status">Status</a><a href="https://agentskills.io/specification">Agent Skills spec ↗</a></span></footer>
     </main>
   );
 }

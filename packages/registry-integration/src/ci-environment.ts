@@ -46,7 +46,7 @@ export async function createEnvironment(): Promise<LiveRegistryIntegrationEnviro
 
   try {
     await waitForDatabase(pool);
-    for (const migrationFile of ["0001_registry_read_path.sql", "0002_registry_publishing.sql", "0003_registry_auth_sessions.sql", "0004_registry_oauth_state.sql", "0005_registry_release_uploads.sql", "0006_registry_scan_jobs.sql", "0007_registry_session_scopes.sql"]) {
+    for (const migrationFile of ["0001_registry_read_path.sql", "0002_registry_publishing.sql", "0003_registry_auth_sessions.sql", "0004_registry_oauth_state.sql", "0005_registry_release_uploads.sql", "0006_registry_scan_jobs.sql", "0007_registry_session_scopes.sql", "0008_registry_moderation.sql", "0009_release_moderation.sql", "0010_digest_denylist.sql"]) {
       const migration = await readFile(new URL(`../../registry-db/migrations/${migrationFile}`, import.meta.url), "utf8");
       await pool.query(migration);
     }

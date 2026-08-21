@@ -1,9 +1,20 @@
 import {
   validateRegistryApiError,
   validateRegistryAuthSessionResponse,
+  validateRegistryAuthSessionMetadataResponse,
   validateRegistryArtifactUploadRequest,
   validateRegistryArtifactUploadResponse,
+  validateRegistryModerationAuditEventListRequest,
+  validateRegistryModerationAuditEventListResponse,
   validateRegistryPackageSummary,
+  validateRegistryPublisherWorkspaceResponse,
+  validateRegistryReport,
+  validateRegistryReportRequest,
+  validateRegistryReleaseModerationRequest,
+  validateRegistryReleaseModerationResponse,
+  validateRegistryDigestDenylistMutationRequest,
+  validateRegistryDigestDenylistMutationResponse,
+  validateRegistryDigestDenylistResponse,
   validateRegistryReleaseCompletionRequest,
   validateRegistryReleaseCompletionResponse,
   validateRegistryReleaseReservation,
@@ -11,15 +22,28 @@ import {
   validateRegistryReleaseLookupResponse,
   validateRegistrySearchRequest,
   validateRegistrySearchResponse,
+  validateRegistryStatusResponse,
   AGENTCARGO_ARTIFACT_MEDIA_TYPE,
   type RegistryAuthCredential,
   type RegistryAuthSession,
+  type RegistryAuthSessionMetadata,
+  type RegistryModerationAuditEventListRequest,
+  type RegistryModerationAuditEventListResponse,
   type RegistryArtifactUploadRequest,
   type RegistryArtifactUploadResponse,
   type RegistryReleaseCompletionRequest,
   type RegistryReleaseCompletionResponse,
   type RegistryPackageCoordinate,
   type RegistryPackageSummary,
+  type RegistryPublisherWorkspaceResponse,
+  type RegistryReport,
+  type RegistryReportRequest,
+  type RegistryReleaseModerationOperation,
+  type RegistryReleaseModerationRequest,
+  type RegistryReleaseModerationResponse,
+  type RegistryDigestDenylistMutationRequest,
+  type RegistryDigestDenylistMutationResponse,
+  type RegistryDigestDenylistResponse,
   type RegistryArtifactDownload,
   type RegistryReleaseCoordinate,
   type RegistryReleaseLookupResponse,
@@ -28,6 +52,7 @@ import {
   type RegistrySessionScope,
   type RegistrySearchRequest,
   type RegistrySearchResponse,
+  type RegistryStatusResponse,
 } from "@agentcargo/registry-contract";
 
 const PACKAGE_PART = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -109,6 +134,10 @@ export class RegistryClient {
     );
   }
 
+  async getStatus(): Promise<RegistryStatusResponse> {
+    return this.#request("/v1/status", validateRegistryStatusResponse);
+  }
+
   async downloadArtifact(download: RegistryArtifactDownload): Promise<Uint8Array> {
     const url = parseDownloadUrl(download.url);
     let response: Response;
@@ -157,6 +186,99 @@ export class RegistryClient {
       requestInit(providerAuth, options.scopes === undefined ? {} : { scopes: options.scopes }),
     );
     return response.session;
+  }
+
+  /** Resolve token-free expiry and scope metadata for an AgentCargo session. */
+  async inspectSession(auth: RegistryAuthInput): Promise<RegistryAuthSessionMetadata> {
+    const response = await this.#request(
+      "/v1/auth/session",
+      validateRegistryAuthSessionMetadataResponse,
+      "REGISTRY_AUTH_REQUIRED",
+      authRequestInit(auth),
+    );
+    return response.session;
+  }
+
+  async getPublisherWorkspace(auth: RegistryAuthInput): Promise<RegistryPublisherWorkspaceResponse> {
+    return this.#request(
+      "/v1/publisher/workspace",
+      validateRegistryPublisherWorkspaceResponse,
+      "REGISTRY_AUTH_REQUIRED",
+      authRequestInit(auth),
+    );
+  }
+
+  async submitReport(request: RegistryReportRequest, auth: RegistryAuthInput): Promise<RegistryReport> {
+    const requestValidation = validateRegistryReportRequest(request);
+    if (!requestValidation.valid) {
+      throw new RegistryClientError("REGISTRY_REQUEST_INVALID", requestValidation.issues[0]?.message ?? "The moderation report request is invalid.");
+    }
+    return this.#request(
+      "/v1/reports",
+      validateRegistryReport,
+      undefined,
+      requestInit(auth, requestValidation.value),
+    );
+  }
+
+  async listModerationAuditEvents(
+    auth: RegistryAuthInput,
+    request: RegistryModerationAuditEventListRequest = {},
+  ): Promise<RegistryModerationAuditEventListResponse> {
+    const requestValidation = validateRegistryModerationAuditEventListRequest(request);
+    if (!requestValidation.valid) {
+      throw new RegistryClientError("REGISTRY_REQUEST_INVALID", requestValidation.issues[0]?.message ?? "The moderation audit query is invalid.");
+    }
+    const params = new URLSearchParams();
+    if (request.cursor) params.set("cursor", request.cursor);
+    if (request.limit !== undefined) params.set("limit", String(request.limit));
+    const query = params.toString();
+    return this.#request(
+      `/v1/admin/audit-events${query ? `?${query}` : ""}`,
+      validateRegistryModerationAuditEventListResponse,
+      undefined,
+      authRequestInit(auth),
+    );
+  }
+
+  async moderateRelease(
+    coordinate: RegistryReleaseCoordinate,
+    operation: RegistryReleaseModerationOperation,
+    request: RegistryReleaseModerationRequest,
+    auth: RegistryAuthInput,
+  ): Promise<RegistryReleaseModerationResponse> {
+    assertReleaseCoordinate(coordinate);
+    const requestValidation = validateRegistryReleaseModerationRequest(request);
+    if (!requestValidation.valid) {
+      throw new RegistryClientError("REGISTRY_REQUEST_INVALID", requestValidation.issues[0]?.message ?? "The release moderation request is invalid.");
+    }
+    const prefix = operation === "deprecate" ? "/v1/packages" : "/v1/admin/packages";
+    return this.#request(
+      `${prefix}/${encodeURIComponent(coordinate.namespace)}/${encodeURIComponent(coordinate.name)}/versions/${encodeURIComponent(coordinate.version)}/${operation}`,
+      validateRegistryReleaseModerationResponse,
+      undefined,
+      requestInit(auth, requestValidation.value),
+    );
+  }
+
+  async listDigestDenylist(): Promise<RegistryDigestDenylistResponse> {
+    return this.#request("/v1/security/denylist", validateRegistryDigestDenylistResponse);
+  }
+
+  async mutateDigestDenylist(
+    request: RegistryDigestDenylistMutationRequest,
+    auth: RegistryAuthInput,
+  ): Promise<RegistryDigestDenylistMutationResponse> {
+    const requestValidation = validateRegistryDigestDenylistMutationRequest(request);
+    if (!requestValidation.valid) {
+      throw new RegistryClientError("REGISTRY_REQUEST_INVALID", requestValidation.issues[0]?.message ?? "The digest denylist request is invalid.");
+    }
+    return this.#request(
+      "/v1/admin/security/denylist",
+      validateRegistryDigestDenylistMutationResponse,
+      undefined,
+      requestInit(auth, requestValidation.value),
+    );
   }
 
   async reserveRelease(
@@ -330,17 +452,26 @@ function parseUploadUrl(input: string): URL {
 }
 
 function requestInit(auth: RegistryAuthInput, body: unknown): RequestInit {
+  const authInit = authRequestInit(auth);
+  const headers = new Headers(authInit.headers);
+  headers.set("content-type", "application/json");
+  return {
+    ...authInit,
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  };
+}
+
+function authRequestInit(auth: RegistryAuthInput): RequestInit {
   const accessToken = typeof auth === "string" ? auth : auth.accessToken;
   if (typeof accessToken !== "string" || accessToken.length < 1 || accessToken.length > 16_384 || /[^\u0021-\u007e]/.test(accessToken)) {
     throw new RegistryClientError("REGISTRY_AUTH_REQUIRED", "A valid registry authentication credential is required.");
   }
   return {
-    method: "POST",
     headers: {
       authorization: `Bearer ${accessToken}`,
-      "content-type": "application/json",
     },
-    body: JSON.stringify(body),
   };
 }
 

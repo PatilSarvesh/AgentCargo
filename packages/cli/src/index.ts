@@ -19,6 +19,7 @@ import {
   type RegistryPackageSummary,
   type RegistryRelease,
   type RegistrySearchResponse,
+  type RegistryStatusResponse,
 } from "@agentcargo/registry-contract";
 import {
   FileRegistryCredentialStore,
@@ -99,6 +100,23 @@ program
   });
 
 program
+  .command("status")
+  .description("Show public operational status for a registry.")
+  .option("--registry <url>", "registry base URL (or set AGENTCARGO_REGISTRY_URL)")
+  .option("--json", "print machine-readable output")
+  .action(async (options: RegistryStatusOptions) => {
+    try {
+      const response = await createRegistryClient(options.registry).getStatus();
+      const healthy = response.overall !== "outage";
+      if (options.json) printJson({ ok: healthy, ...response });
+      else printRegistryStatus(response);
+      if (!healthy) process.exitCode = 1;
+    } catch (error) {
+      handleError(error, options.json);
+    }
+  });
+
+program
   .command("inspect")
   .description("Inspect a public package or exact release in a registry.")
   .argument("<package>", "@namespace/name or @namespace/name@version")
@@ -135,7 +153,7 @@ program
   .action(async (inputPath: string, options: PublishOptions) => {
     try {
       const registry = requireRegistryUrl(options.registry);
-      const credential = await requirePublishCredential(registry);
+      const credential = await requirePublishSession(registry);
       const result = await publishLocalSkill(inputPath, options, credential, registry);
       if (options.json) printJson({ ok: true, ...result });
       else {
@@ -642,6 +660,10 @@ interface RegistrySearchOptions extends JsonOptions {
 
 interface RegistryInspectOptions extends JsonOptions {
   registry: string;
+}
+
+interface RegistryStatusOptions extends JsonOptions {
+  registry?: string;
 }
 
 interface PublishOptions extends JsonOptions {
@@ -1303,7 +1325,7 @@ function requireRegistryUrl(registry: string | undefined): string {
   return baseUrl;
 }
 
-async function requirePublishCredential(registry: string): Promise<{ accessToken: string }> {
+async function requirePublishSession(registry: string): Promise<{ accessToken: string }> {
   const credential = await new FileRegistryCredentialStore().get(registry);
   if (!credential || (credential.expiresAt && Date.parse(credential.expiresAt) <= Date.now())) {
     throw new CliError(
@@ -1311,7 +1333,23 @@ async function requirePublishCredential(registry: string): Promise<{ accessToken
       `No active registry credential exists for ${registry}. Run agentcargo auth login or auth refresh first.`,
     );
   }
-  return { accessToken: credential.accessToken };
+
+  const session = await createRegistryClient(registry).exchangeGitHubSession(credential.accessToken, {
+    scopes: ["publisher:write"],
+  });
+  if (session.scopes.length !== 1 || session.scopes[0] !== "publisher:write") {
+    throw new CliError(
+      "AUTH_SESSION_SCOPE_INVALID",
+      "The registry did not issue the required publisher:write session.",
+    );
+  }
+  if (Date.parse(session.expiresAt) <= Date.now()) {
+    throw new CliError(
+      "AUTH_SESSION_EXPIRED",
+      "The registry issued an expired publisher session. Retry authentication before publishing.",
+    );
+  }
+  return { accessToken: session.accessToken };
 }
 
 function requireGitHubClientId(clientId: string | undefined): string {
@@ -1397,6 +1435,27 @@ function printRegistryRelease(release: RegistryRelease): void {
   console.log(`Tags: ${release.declared.tags.length > 0 ? release.declared.tags.join(", ") : "none"}`);
   console.log(`Findings: ${release.scan.findings.length}`);
   if (release.source.repositoryUrl) console.log(`Source: ${release.source.repositoryUrl}`);
+}
+
+function printRegistryStatus(response: RegistryStatusResponse): void {
+  console.log(`Registry status: ${response.overall.toUpperCase()}`);
+  console.log(`Generated: ${response.generatedAt}`);
+  for (const [name, component] of Object.entries(response.components)) {
+    console.log(`${name}: ${component.status.toUpperCase()}`);
+    if (component.detail) console.log(`  Detail: ${component.detail}`);
+    if ("ready" in component) {
+      console.log(`  Ready: ${component.ready ? "yes" : "no"}`);
+      console.log(`  Reason: ${component.reason}`);
+      console.log(`  Runs: ${component.totalRuns}; claimed: ${component.claimedJobs}; consecutive failures: ${component.consecutiveFailures}`);
+      if (component.lastRunAgeMs !== null) console.log(`  Last run age: ${component.lastRunAgeMs} ms`);
+      if (component.queue) {
+        console.log(`  Queue: ${component.queue.queued} queued, ${component.queue.running} running, ${component.queue.failed} failed, ${component.queue.staleLeases} stale leases, ${component.queue.lagMs} ms lag`);
+      }
+    }
+    if ("activeDenylistEntries" in component && component.activeDenylistEntries !== null) {
+      console.log(`  Active denylist entries: ${component.activeDenylistEntries}`);
+    }
+  }
 }
 
 function formatCompatibility(value: { compatibility: Readonly<Record<string, { scopes: readonly InstallScope[] }>> }): string {

@@ -146,6 +146,368 @@
         }
       }
     },
+    "/v1/auth/session": {
+      "get": {
+        "operationId": "inspectRegistrySession",
+        "summary": "Inspect an AgentCargo session",
+        "description": "Validates a short-lived AgentCargo bearer session and returns token-free expiry and scope metadata. The response is never cacheable.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Token-free metadata for the active AgentCargo session",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryAuthSessionMetadataResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "501": {
+            "$ref": "#/components/responses/AuthNotConfigured"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/status": {
+      "get": {
+        "operationId": "getRegistryStatus",
+        "summary": "Get public registry operational status",
+        "description": "Returns sanitized API, database, artifact-storage, scan-worker, and moderation signals. It contains no package contents, credentials, or internal error details.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Current public operational status",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryStatusResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/v1/publisher/workspace": {
+      "get": {
+        "operationId": "getPublisherWorkspace",
+        "summary": "Get the authenticated publisher workspace",
+        "description": "Returns namespaces, packages, and immutable release histories owned by the authenticated publisher. Requires publisher:read and is never cacheable.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The authenticated publisher's package and version history",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryPublisherWorkspaceResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "501": {
+            "$ref": "#/components/responses/NotConfigured"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/reports": {
+      "post": {
+        "operationId": "submitReport",
+        "summary": "Submit an authenticated package or release report",
+        "description": "Creates a bounded abuse report and an append-only report_created moderation audit event. Replays with the same reporter and idempotency key are safe.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistryReportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "A newly created report",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryReport"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "An idempotent report replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "501": {
+            "$ref": "#/components/responses/NotConfigured"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/admin/audit-events": {
+      "get": {
+        "operationId": "listModerationAuditEvents",
+        "summary": "List append-only moderation audit events",
+        "description": "Maintainer-only, no-store audit history. Event metadata is bounded and excludes report evidence, tokens, and package contents.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Moderation audit events",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryModerationAuditEventListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "501": {
+            "$ref": "#/components/responses/NotConfigured"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/packages/{namespace}/{name}/versions/{version}/deprecate": {
+      "post": {
+        "operationId": "deprecateRelease",
+        "summary": "Deprecate an owned public release",
+        "description": "Requires publisher:write and namespace ownership. The release remains addressable as deprecated; the coordinate and artifact identity stay immutable.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/Namespace" },
+          { "$ref": "#/components/parameters/Name" },
+          { "$ref": "#/components/parameters/Version" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RegistryReleaseModerationRequest" } } }
+        },
+        "responses": {
+          "201": { "description": "Release deprecated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RegistryReleaseModerationResponse" } } } },
+          "200": { "description": "Idempotent replay", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RegistryReleaseModerationResponse" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "501": { "$ref": "#/components/responses/NotConfigured" },
+          "503": { "$ref": "#/components/responses/ServiceUnavailable" }
+        }
+      }
+    },
+    "/v1/admin/packages/{namespace}/{name}/versions/{version}/quarantine": {
+      "post": {
+        "operationId": "quarantineRelease",
+        "summary": "Quarantine a public release",
+        "description": "Maintainer-only emergency control. Quarantined releases are excluded from anonymous package, search, and exact-release reads while their immutable history remains auditable.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/Namespace" },
+          { "$ref": "#/components/parameters/Name" },
+          { "$ref": "#/components/parameters/Version" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RegistryReleaseModerationRequest" } } }
+        },
+        "responses": {
+          "201": { "description": "Release quarantined", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RegistryReleaseModerationResponse" } } } },
+          "200": { "description": "Idempotent replay", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RegistryReleaseModerationResponse" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "501": { "$ref": "#/components/responses/NotConfigured" },
+          "503": { "$ref": "#/components/responses/ServiceUnavailable" }
+        }
+      }
+    },
+    "/v1/admin/packages/{namespace}/{name}/versions/{version}/unquarantine": {
+      "post": {
+        "operationId": "unquarantineRelease",
+        "summary": "Restore a quarantined release",
+        "description": "Maintainer-only restoration. The release returns to its pre-quarantine public status and emits a new append-only moderation event.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/Namespace" },
+          { "$ref": "#/components/parameters/Name" },
+          { "$ref": "#/components/parameters/Version" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RegistryReleaseModerationRequest" } } }
+        },
+        "responses": {
+          "201": { "description": "Release restored", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RegistryReleaseModerationResponse" } } } },
+          "200": { "description": "Idempotent replay", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RegistryReleaseModerationResponse" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "501": { "$ref": "#/components/responses/NotConfigured" },
+          "503": { "$ref": "#/components/responses/ServiceUnavailable" }
+        }
+      }
+    },
+    "/v1/security/denylist": {
+      "get": {
+        "operationId": "listDigestDenylist",
+        "summary": "List active emergency digest blocks",
+        "description": "Returns only active SHA-256 blocks and bounded remediation reasons. Clients should fail closed if this endpoint is unavailable before installing a release.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Active digest denylist",
+            "headers": {
+              "Cache-Control": { "schema": { "type": "string", "const": "no-store" } }
+            },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RegistryDigestDenylistResponse" } } }
+          },
+          "501": { "$ref": "#/components/responses/NotConfigured" },
+          "503": { "$ref": "#/components/responses/ServiceUnavailable" }
+        }
+      }
+    },
+    "/v1/admin/security/denylist": {
+      "post": {
+        "operationId": "mutateDigestDenylist",
+        "summary": "Add or remove an emergency digest block",
+        "description": "Maintainer-only, idempotent emergency control. Every add/remove emits an append-only moderation audit event targeting the artifact digest.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RegistryDigestDenylistMutationRequest" } } }
+        },
+        "responses": {
+          "201": { "description": "Denylist state changed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RegistryDigestDenylistMutationResponse" } } } },
+          "200": { "description": "Idempotent replay", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RegistryDigestDenylistMutationResponse" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "501": { "$ref": "#/components/responses/NotConfigured" },
+          "503": { "$ref": "#/components/responses/ServiceUnavailable" }
+        }
+      }
+    },
     "/v1/search": {
       "get": {
         "operationId": "searchPackages",
@@ -660,6 +1022,16 @@
           }
         }
       },
+      "Forbidden": {
+        "description": "The authenticated session does not contain the required registry scope",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/RegistryApiError"
+            }
+          }
+        }
+      },
       "Conflict": {
         "description": "The idempotency key or release coordinate conflicts with an existing reservation",
         "content": {
@@ -692,6 +1064,16 @@
       },
       "ServiceUnavailable": {
         "description": "The identity provider or registry is temporarily unavailable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/RegistryApiError"
+            }
+          }
+        }
+      },
+      "InternalError": {
+        "description": "The registry returned an invalid operational response",
         "content": {
           "application/json": {
             "schema": {
@@ -790,6 +1172,271 @@
           }
         }
       },
+      "RegistryAuthSessionMetadata": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expiresAt",
+          "scopes"
+        ],
+        "properties": {
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "scopes": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 2,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/RegistrySessionScope"
+            }
+          }
+        }
+      },
+      "RegistryAuthSessionMetadataResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "session"
+        ],
+        "properties": {
+          "apiVersion": {
+            "$ref": "#/components/schemas/RegistryApiVersion"
+          },
+          "session": {
+            "$ref": "#/components/schemas/RegistryAuthSessionMetadata"
+          }
+        }
+      },
+      "RegistryOperationalStatus": {
+        "type": "string",
+        "enum": [
+          "operational",
+          "degraded",
+          "unavailable",
+          "not_configured"
+        ]
+      },
+      "RegistryStatusOverall": {
+        "type": "string",
+        "enum": [
+          "operational",
+          "degraded",
+          "outage"
+        ]
+      },
+      "RegistryStatusComponent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "checkedAt"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/RegistryOperationalStatus"
+          },
+          "checkedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "detail": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        }
+      },
+      "RegistryStatusQueue": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "queued",
+          "failed",
+          "running",
+          "staleLeases",
+          "oldestAvailableAt",
+          "lagMs"
+        ],
+        "properties": {
+          "queued": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "running": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "staleLeases": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "oldestAvailableAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lagMs": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "RegistryStatusWorkerComponent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "checkedAt",
+          "ready",
+          "reason",
+          "totalRuns",
+          "claimedJobs",
+          "consecutiveFailures",
+          "lastRunAgeMs",
+          "queue"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/RegistryOperationalStatus"
+          },
+          "checkedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "detail": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+              "ready": {
+                "type": "boolean"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "totalRuns": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "claimedJobs": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "consecutiveFailures": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "lastRunAgeMs": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "queue": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RegistryStatusQueue"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+        }
+      },
+      "RegistryStatusModerationComponent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "checkedAt",
+          "activeDenylistEntries"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/RegistryOperationalStatus"
+          },
+          "checkedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "detail": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "activeDenylistEntries": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          }
+        }
+      },
+      "RegistryStatusResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "generatedAt",
+          "overall",
+          "components"
+        ],
+        "properties": {
+          "apiVersion": {
+            "$ref": "#/components/schemas/RegistryApiVersion"
+          },
+          "generatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "overall": {
+            "$ref": "#/components/schemas/RegistryStatusOverall"
+          },
+          "components": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "api",
+              "database",
+              "storage",
+              "worker",
+              "moderation"
+            ],
+            "properties": {
+              "api": {
+                "$ref": "#/components/schemas/RegistryStatusComponent"
+              },
+              "database": {
+                "$ref": "#/components/schemas/RegistryStatusComponent"
+              },
+              "storage": {
+                "$ref": "#/components/schemas/RegistryStatusComponent"
+              },
+              "worker": {
+                "$ref": "#/components/schemas/RegistryStatusWorkerComponent"
+              },
+              "moderation": {
+                "$ref": "#/components/schemas/RegistryStatusModerationComponent"
+              }
+            }
+          }
+        }
+      },
       "RegistryAuthSessionResponse": {
         "type": "object",
         "additionalProperties": false,
@@ -804,6 +1451,430 @@
           "session": {
             "$ref": "#/components/schemas/RegistryAuthSession"
           }
+        }
+      },
+      "RegistryPublisherReleaseStatus": {
+        "type": "string",
+        "enum": [
+          "reserved",
+          "expired",
+          "uploading",
+          "uploaded",
+          "scanning",
+          "active",
+          "deprecated",
+          "quarantined",
+          "rejected"
+        ]
+      },
+      "RegistryPublisherReleaseSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "releaseId",
+          "version",
+          "status",
+          "createdAt",
+          "expiresAt"
+        ],
+        "properties": {
+          "releaseId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "version": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RegistryPublisherReleaseStatus"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "digest": {
+            "$ref": "#/components/schemas/Sha256Digest"
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "publishedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RegistryPublisherPackageHistory": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "package",
+          "releases"
+        ],
+        "properties": {
+          "package": {
+            "$ref": "#/components/schemas/PackageCoordinate"
+          },
+          "latestVersion": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+          },
+          "releases": {
+            "type": "array",
+            "maxItems": 10000,
+            "items": {
+              "$ref": "#/components/schemas/RegistryPublisherReleaseSummary"
+            }
+          }
+        }
+      },
+      "RegistryPublisherNamespaceSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "namespace",
+          "packages"
+        ],
+        "properties": {
+          "namespace": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+          },
+          "packages": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": {
+              "$ref": "#/components/schemas/RegistryPublisherPackageHistory"
+            }
+          }
+        }
+      },
+      "RegistryPublisherWorkspaceResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "namespaces"
+        ],
+        "properties": {
+          "apiVersion": {
+            "$ref": "#/components/schemas/RegistryApiVersion"
+          },
+          "namespaces": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/RegistryPublisherNamespaceSummary"
+            }
+          }
+        }
+      },
+      "RegistryReportCategory": {
+        "type": "string",
+        "enum": [
+          "malware",
+          "impersonation",
+          "spam",
+          "copyright",
+          "policy",
+          "other"
+        ]
+      },
+      "RegistryReportStatus": {
+        "type": "string",
+        "enum": [
+          "open",
+          "triaged",
+          "resolved",
+          "dismissed"
+        ]
+      },
+      "RegistryReportTarget": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "package"
+        ],
+        "properties": {
+          "package": {
+            "$ref": "#/components/schemas/PackageCoordinate"
+          },
+          "releaseVersion": {
+            "$ref": "#/components/schemas/ReleaseCoordinate/properties/version"
+          }
+        }
+      },
+      "RegistryReportRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "target",
+          "category",
+          "evidence",
+          "idempotencyKey"
+        ],
+        "properties": {
+          "target": {
+            "$ref": "#/components/schemas/RegistryReportTarget"
+          },
+          "category": {
+            "$ref": "#/components/schemas/RegistryReportCategory"
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "RegistryReport": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "reportId",
+          "target",
+          "category",
+          "status",
+          "evidence",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "apiVersion": {
+            "$ref": "#/components/schemas/RegistryApiVersion"
+          },
+          "reportId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "target": {
+            "$ref": "#/components/schemas/RegistryReportTarget"
+          },
+          "category": {
+            "$ref": "#/components/schemas/RegistryReportCategory"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RegistryReportStatus"
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RegistryReleaseModerationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["reason", "idempotencyKey"],
+        "properties": {
+          "reason": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "idempotencyKey": { "type": "string", "minLength": 1, "maxLength": 128 }
+        }
+      },
+      "RegistryReleaseModerationOperation": {
+        "type": "string",
+        "enum": ["deprecate", "quarantine", "unquarantine"]
+      },
+      "RegistryReleaseModerationResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["apiVersion", "coordinate", "operation", "status", "changedAt", "auditEventId"],
+        "properties": {
+          "apiVersion": { "$ref": "#/components/schemas/RegistryApiVersion" },
+          "coordinate": { "$ref": "#/components/schemas/ReleaseCoordinate" },
+          "operation": { "$ref": "#/components/schemas/RegistryReleaseModerationOperation" },
+          "status": { "type": "string", "enum": ["active", "deprecated", "quarantined"] },
+          "changedAt": { "type": "string", "format": "date-time" },
+          "auditEventId": { "type": "string", "minLength": 1, "maxLength": 128 }
+        }
+      },
+      "RegistryDigestDenylistEntry": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["digest", "reason", "addedAt"],
+        "properties": {
+          "digest": { "$ref": "#/components/schemas/Sha256Digest" },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "addedAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "RegistryDigestDenylistResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["apiVersion", "items"],
+        "properties": {
+          "apiVersion": { "$ref": "#/components/schemas/RegistryApiVersion" },
+          "items": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": { "$ref": "#/components/schemas/RegistryDigestDenylistEntry" }
+          }
+        }
+      },
+      "RegistryDigestDenylistMutationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["action", "digest", "reason", "idempotencyKey"],
+        "properties": {
+          "action": { "type": "string", "enum": ["add", "remove"] },
+          "digest": { "$ref": "#/components/schemas/Sha256Digest" },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "idempotencyKey": { "type": "string", "minLength": 1, "maxLength": 128 }
+        }
+      },
+      "RegistryDigestDenylistMutationResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["apiVersion", "action", "digest", "active", "changedAt", "auditEventId"],
+        "properties": {
+          "apiVersion": { "$ref": "#/components/schemas/RegistryApiVersion" },
+          "action": { "type": "string", "enum": ["add", "remove"] },
+          "digest": { "$ref": "#/components/schemas/Sha256Digest" },
+          "active": { "type": "boolean" },
+          "changedAt": { "type": "string", "format": "date-time" },
+          "auditEventId": { "type": "string", "minLength": 1, "maxLength": 128 }
+        }
+      },
+      "RegistryModerationAuditAction": {
+        "type": "string",
+        "enum": [
+          "report_created",
+          "report_triaged",
+          "report_resolved",
+          "report_dismissed",
+          "release_deprecated",
+          "release_quarantined",
+          "release_unquarantined",
+          "digest_denylisted",
+          "digest_denylist_removed"
+        ]
+      },
+      "RegistryModerationActor": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "publisher",
+              "maintainer",
+              "system"
+            ]
+          },
+          "identity": {
+            "$ref": "#/components/schemas/RegistryPublisherIdentity"
+          }
+        }
+      },
+      "RegistryModerationAuditTarget": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "reportId"],
+            "properties": {
+              "type": { "const": "report" },
+              "reportId": { "type": "string", "minLength": 1, "maxLength": 128 }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "package"],
+            "properties": {
+              "type": { "const": "package" },
+              "package": { "$ref": "#/components/schemas/PackageCoordinate" }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "release"],
+            "properties": {
+              "type": { "const": "release" },
+              "release": { "$ref": "#/components/schemas/ReleaseCoordinate" }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "digest"],
+            "properties": {
+              "type": { "const": "artifact" },
+              "digest": { "$ref": "#/components/schemas/Sha256Digest" }
+            }
+          }
+        ]
+      },
+      "RegistryModerationAuditEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "eventId",
+          "action",
+          "actor",
+          "target",
+          "occurredAt",
+          "requestId",
+          "metadata"
+        ],
+        "properties": {
+          "eventId": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "action": { "$ref": "#/components/schemas/RegistryModerationAuditAction" },
+          "actor": { "$ref": "#/components/schemas/RegistryModerationActor" },
+          "target": { "$ref": "#/components/schemas/RegistryModerationAuditTarget" },
+          "occurredAt": { "type": "string", "format": "date-time" },
+          "requestId": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "metadata": {
+            "type": "object",
+            "maxProperties": 32,
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            }
+          }
+        }
+      },
+      "RegistryModerationAuditEventListResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["apiVersion", "items"],
+        "properties": {
+          "apiVersion": { "$ref": "#/components/schemas/RegistryApiVersion" },
+          "items": {
+            "type": "array",
+            "maxItems": 100,
+            "items": { "$ref": "#/components/schemas/RegistryModerationAuditEvent" }
+          },
+          "nextCursor": { "type": "string", "minLength": 1, "maxLength": 512 }
         }
       },
       "Sha256Digest": {

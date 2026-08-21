@@ -3,6 +3,7 @@ import type { RegistryRelease } from "@agentcargo/registry-contract";
 import {
   InMemoryRegistryReleaseRepository,
   InMemoryRegistryReleaseReservationRepository,
+  InMemoryRegistryModerationRepository,
   RegistryReleaseReservationError,
 } from "@agentcargo/registry-db";
 import {
@@ -13,10 +14,76 @@ import {
   extractBearerToken,
   extractCookieToken,
   InMemoryRegistrySessionStore,
+  InMemoryRegistryRateLimiter,
   ProviderSessionExchange,
 } from "./index.js";
 
 describe("registry read API", () => {
+  it("serves sanitized operational status from injected component signals", async () => {
+    const app = buildRegistryApp({
+      repository: new InMemoryRegistryReleaseRepository([makeRelease()]),
+      status: {
+        now: () => new Date("2026-08-20T00:00:00.000Z"),
+        database: async () => ({ status: "operational", detail: "PostgreSQL primary ready" }),
+        storage: async () => ({ status: "operational", detail: "Object storage ready\nsecret" }),
+        worker: async () => ({
+          status: "degraded",
+          ready: false,
+          reason: "queue-lag\ninternal details",
+          totalRuns: 12,
+          claimedJobs: 8,
+          consecutiveFailures: 1,
+          lastRunAgeMs: 2500,
+          queue: { queued: 4, failed: 1, running: 1, staleLeases: 0, oldestAvailableAt: "2026-08-20T00:00:00.000Z", lagMs: 2500 },
+        }),
+        moderation: async () => ({ status: "operational", activeDenylistEntries: 2 }),
+      },
+    });
+
+    const response = await app.inject({ method: "GET", url: "/v1/status" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["cache-control"]).toBe("public, max-age=15, stale-while-revalidate=30");
+    expect(response.json()).toEqual({
+      apiVersion: "v1",
+      generatedAt: "2026-08-20T00:00:00.000Z",
+      overall: "degraded",
+      components: {
+        api: { status: "operational", checkedAt: "2026-08-20T00:00:00.000Z" },
+        database: { status: "operational", checkedAt: "2026-08-20T00:00:00.000Z", detail: "PostgreSQL primary ready" },
+        storage: { status: "operational", checkedAt: "2026-08-20T00:00:00.000Z", detail: "Object storage ready?secret" },
+        worker: {
+          status: "degraded",
+          checkedAt: "2026-08-20T00:00:00.000Z",
+          ready: false,
+          reason: "queue-lag?internal details",
+          totalRuns: 12,
+          claimedJobs: 8,
+          consecutiveFailures: 1,
+          lastRunAgeMs: 2500,
+          queue: { queued: 4, failed: 1, running: 1, staleLeases: 0, oldestAvailableAt: "2026-08-20T00:00:00.000Z", lagMs: 2500 },
+        },
+        moderation: { status: "operational", checkedAt: "2026-08-20T00:00:00.000Z", activeDenylistEntries: 2 },
+      },
+    });
+    await app.close();
+  });
+
+  it("fails closed per component without exposing source errors", async () => {
+    const app = buildRegistryApp({
+      repository: new InMemoryRegistryReleaseRepository([makeRelease()]),
+      status: {
+        now: () => new Date("2026-08-20T00:00:00.000Z"),
+        database: async () => { throw new Error("postgres password"); },
+      },
+    });
+    const response = await app.inject({ method: "GET", url: "/v1/status" });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).not.toContain("postgres password");
+    expect(response.json()).toMatchObject({ overall: "outage", components: { database: { status: "unavailable" } } });
+    await app.close();
+  });
+
   it("serves search, package, and exact release lookups", async () => {
     const app = buildRegistryApp({ repository: new InMemoryRegistryReleaseRepository([makeRelease()]) });
 
@@ -164,6 +231,195 @@ describe("registry read API", () => {
 
     expect(denied.statusCode).toBe(403);
     expect(denied.json()).toMatchObject({ error: { code: "REGISTRY_SCOPE_FORBIDDEN" } });
+    await app.close();
+  });
+
+  it("serves only the authenticated publisher workspace with read scope", async () => {
+    const sessions = new InMemoryRegistrySessionStore({ ttlSeconds: 120 });
+    const readOnly = await sessions.issue({ provider: "github", subject: "publisher-1", login: "acme" }, { scopes: ["publisher:read"] });
+    const writeOnly = await sessions.issue({ provider: "github", subject: "publisher-1", login: "acme" }, { scopes: ["publisher:write"] });
+    const actors: string[] = [];
+    const workspace = {
+      apiVersion: "v1" as const,
+      namespaces: [{
+        namespace: "acme",
+        packages: [{
+          package: { namespace: "acme", name: "review" },
+          latestVersion: "1.0.0",
+          releases: [{
+            releaseId: "release-1",
+            version: "1.0.0",
+            status: "active" as const,
+            createdAt: "2026-08-15T00:00:00.000Z",
+            expiresAt: "2026-08-15T00:30:00.000Z",
+          }],
+        }],
+      }],
+    };
+    const app = buildRegistryApp({
+      repository: new InMemoryRegistryReleaseRepository([makeRelease()]),
+      sessionStore: sessions,
+      publisherWorkspace: {
+        async getWorkspace(actor) {
+          actors.push(actor.subject);
+          return workspace;
+        },
+      },
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/publisher/workspace",
+      headers: { authorization: `Bearer ${readOnly.accessToken}` },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.json()).toEqual(workspace);
+    expect(actors).toEqual(["publisher-1"]);
+
+    const denied = await app.inject({
+      method: "GET",
+      url: "/v1/publisher/workspace",
+      headers: { authorization: `Bearer ${writeOnly.accessToken}` },
+    });
+    expect(denied.statusCode).toBe(403);
+    expect(denied.json()).toMatchObject({ error: { code: "REGISTRY_SCOPE_FORBIDDEN" } });
+
+    const missing = await app.inject({ method: "GET", url: "/v1/publisher/workspace" });
+    expect(missing.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("accepts authenticated reports idempotently and exposes append-only audit events to maintainers", async () => {
+    const moderation = new InMemoryRegistryModerationRepository();
+    const app = buildRegistryApp({
+      repository: new InMemoryRegistryReleaseRepository([makeRelease()]),
+      moderation,
+      resolveReporter: async () => ({ identity: { provider: "github", subject: "reporter-1" } }),
+      resolveMaintainer: async () => ({ identity: { provider: "github", subject: "maintainer-1" }, role: "maintainer" }),
+    });
+    const payload = {
+      target: { package: { namespace: "acme", name: "review" }, releaseVersion: "1.2.3" },
+      category: "malware",
+      evidence: "The release attempts an untrusted download.",
+      idempotencyKey: "report-1",
+    };
+    const first = await app.inject({ method: "POST", url: "/v1/reports", payload });
+    const replay = await app.inject({ method: "POST", url: "/v1/reports", payload });
+    const conflict = await app.inject({ method: "POST", url: "/v1/reports", payload: { ...payload, evidence: "Different evidence." } });
+    const audit = await app.inject({ method: "GET", url: "/v1/admin/audit-events?limit=10" });
+    expect(first.statusCode).toBe(201);
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json().reportId).toBe(first.json().reportId);
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json()).toMatchObject({ error: { code: "REGISTRY_REPORT_IDEMPOTENCY_CONFLICT" } });
+    expect(audit.statusCode).toBe(200);
+    expect(audit.headers["cache-control"]).toBe("no-store");
+    expect(audit.json()).toMatchObject({ items: [{ action: "report_created", target: { type: "report" } }] });
+    await app.close();
+  });
+
+  it("rejects unauthenticated reports and non-maintainer audit reads", async () => {
+    const moderation = new InMemoryRegistryModerationRepository();
+    const app = buildRegistryApp({
+      repository: new InMemoryRegistryReleaseRepository([makeRelease()]),
+      moderation,
+      resolveReporter: async () => null,
+      resolveMaintainer: async () => null,
+    });
+    const report = await app.inject({
+      method: "POST",
+      url: "/v1/reports",
+      payload: { target: { package: { namespace: "acme", name: "review" } }, category: "spam", evidence: "spam", idempotencyKey: "report-unauth" },
+    });
+    const audit = await app.inject({ method: "GET", url: "/v1/admin/audit-events" });
+    expect(report.statusCode).toBe(401);
+    expect(audit.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("guards publisher deprecation and maintainer quarantine restoration", async () => {
+    const moderation = new InMemoryRegistryModerationRepository({
+      releases: [{ coordinate: { namespace: "acme", name: "review", version: "1.2.3" }, status: "active" }],
+      releaseOwners: { acme: "github:publisher-1" },
+    });
+    const app = buildRegistryApp({
+      repository: new InMemoryRegistryReleaseRepository([makeRelease()]),
+      moderation,
+      resolvePublisher: async () => ({ identity: { provider: "github", subject: "publisher-1" }, scopes: ["publisher:write"] }),
+      resolveMaintainer: async () => ({ identity: { provider: "github", subject: "maintainer-1" }, role: "maintainer" }),
+    });
+    const payload = { reason: "The release is superseded.", idempotencyKey: "moderate-1" };
+    const deprecated = await app.inject({ method: "POST", url: "/v1/packages/acme/review/versions/1.2.3/deprecate", payload });
+    const replay = await app.inject({ method: "POST", url: "/v1/packages/acme/review/versions/1.2.3/deprecate", payload });
+    const quarantined = await app.inject({ method: "POST", url: "/v1/admin/packages/acme/review/versions/1.2.3/quarantine", payload: { ...payload, idempotencyKey: "moderate-2" } });
+    const restored = await app.inject({ method: "POST", url: "/v1/admin/packages/acme/review/versions/1.2.3/unquarantine", payload: { ...payload, idempotencyKey: "moderate-3" } });
+    expect(deprecated.statusCode).toBe(201);
+    expect(deprecated.json()).toMatchObject({ operation: "deprecate", status: "deprecated" });
+    expect(replay.statusCode).toBe(200);
+    expect(quarantined.statusCode).toBe(201);
+    expect(quarantined.json()).toMatchObject({ operation: "quarantine", status: "quarantined" });
+    expect(restored.statusCode).toBe(201);
+    expect(restored.json()).toMatchObject({ operation: "unquarantine", status: "deprecated" });
+    await app.close();
+  });
+
+  it("rejects release moderation without the required actor boundary", async () => {
+    const moderation = new InMemoryRegistryModerationRepository({
+      releases: [{ coordinate: { namespace: "acme", name: "review", version: "1.2.3" } }],
+    });
+    const app = buildRegistryApp({
+      repository: new InMemoryRegistryReleaseRepository([makeRelease()]),
+      moderation,
+      resolvePublisher: async () => null,
+      resolveMaintainer: async () => null,
+    });
+    const publisher = await app.inject({ method: "POST", url: "/v1/packages/acme/review/versions/1.2.3/deprecate", payload: { reason: "x", idempotencyKey: "moderate-1" } });
+    const maintainer = await app.inject({ method: "POST", url: "/v1/admin/packages/acme/review/versions/1.2.3/quarantine", payload: { reason: "x", idempotencyKey: "moderate-2" } });
+    expect(publisher.statusCode).toBe(401);
+    expect(maintainer.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("enforces the maintainer digest denylist and hides blocked releases", async () => {
+    const moderation = new InMemoryRegistryModerationRepository();
+    const digest = `sha256:${"a".repeat(64)}`;
+    const app = buildRegistryApp({
+      repository: new InMemoryRegistryReleaseRepository([makeRelease()]),
+      moderation,
+      resolveMaintainer: async () => ({ identity: { provider: "github", subject: "maintainer-1" }, role: "maintainer" }),
+    });
+    const payload = { action: "add", digest, reason: "Emergency block.", idempotencyKey: "deny-1" };
+    const added = await app.inject({ method: "POST", url: "/v1/admin/security/denylist", payload });
+    const replay = await app.inject({ method: "POST", url: "/v1/admin/security/denylist", payload });
+    const listed = await app.inject({ method: "GET", url: "/v1/security/denylist" });
+    const hidden = await app.inject({ method: "GET", url: "/v1/packages/acme/review/versions/1.2.3" });
+    const removed = await app.inject({ method: "POST", url: "/v1/admin/security/denylist", payload: { ...payload, action: "remove", idempotencyKey: "deny-2" } });
+    const visible = await app.inject({ method: "GET", url: "/v1/packages/acme/review/versions/1.2.3" });
+    expect(added.statusCode).toBe(201);
+    expect(added.json()).toMatchObject({ action: "add", active: true, digest });
+    expect(replay.statusCode).toBe(200);
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toMatchObject({ items: [{ digest, reason: "Emergency block." }] });
+    expect(hidden.statusCode).toBe(404);
+    expect(removed.statusCode).toBe(201);
+    expect(removed.json()).toMatchObject({ action: "remove", active: false, digest });
+    expect(visible.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it("rejects digest denylist mutations from non-maintainers", async () => {
+    const app = buildRegistryApp({
+      repository: new InMemoryRegistryReleaseRepository([makeRelease()]),
+      moderation: new InMemoryRegistryModerationRepository(),
+      resolveMaintainer: async () => null,
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/admin/security/denylist",
+      payload: { action: "add", digest: `sha256:${"a".repeat(64)}`, reason: "Emergency block.", idempotencyKey: "deny-unauth" },
+    });
+    expect(response.statusCode).toBe(401);
     await app.close();
   });
 
@@ -393,6 +649,10 @@ describe("registry read API", () => {
     expect(session.tokenType).toBe("bearer");
     expect(session.expiresAt).toBe("2026-08-15T00:01:00.000Z");
     expect(await store.resolve(session.accessToken)).toEqual({ provider: "github", subject: "user-1", login: "acme" });
+    expect(await store.inspect(session.accessToken)).toEqual({
+      expiresAt: "2026-08-15T00:01:00.000Z",
+      scopes: ["publisher:read", "publisher:write"],
+    });
     expect(await store.resolve("acs_invalid_token")).toBeNull();
 
     now += 60_000;
@@ -415,6 +675,7 @@ describe("registry read API", () => {
           return token === "ghu_provider_token" ? { provider: "github", subject: "user-1", login: "acme" } : null;
         },
       }, store),
+      sessionStore: store,
       releaseReservations: new InMemoryRegistryReleaseReservationRepository(),
       resolvePublisher: createBearerPublisherResolver({ verify: (token) => store.resolve(token) }),
     });
@@ -441,6 +702,21 @@ describe("registry read API", () => {
     expect(readOnly.statusCode).toBe(201);
     expect(readOnly.json().session.scopes).toEqual(["publisher:read"]);
 
+    const readOnlyToken = readOnly.json().session.accessToken as string;
+    const inspected = await app.inject({
+      method: "GET",
+      url: "/v1/auth/session",
+      headers: { authorization: `Bearer ${readOnlyToken}` },
+    });
+    expect(inspected.statusCode).toBe(200);
+    expect(inspected.headers["cache-control"]).toBe("no-store");
+    expect(inspected.json()).toEqual({
+      apiVersion: "v1",
+      session: { expiresAt: readOnly.json().session.expiresAt, scopes: ["publisher:read"] },
+    });
+    expect(inspected.body).not.toContain(readOnlyToken);
+    expect(inspected.body).not.toContain("user-1");
+
     const sessionToken = exchanged.json().session.accessToken as string;
     const reservation = await app.inject({
       method: "POST",
@@ -457,6 +733,14 @@ describe("registry read API", () => {
     });
     expect(invalid.statusCode).toBe(401);
     expect(invalid.json()).toMatchObject({ error: { code: "REGISTRY_AUTH_REQUIRED" } });
+
+    const invalidInspection = await app.inject({
+      method: "GET",
+      url: "/v1/auth/session",
+      headers: { authorization: "Bearer acs_invalid_session" },
+    });
+    expect(invalidInspection.statusCode).toBe(401);
+    expect(invalidInspection.body).not.toContain("acs_invalid_session");
     await app.close();
   });
 
@@ -469,6 +753,12 @@ describe("registry read API", () => {
     });
     expect(missing.statusCode).toBe(501);
     expect(missing.json()).toMatchObject({ error: { code: "REGISTRY_AUTH_NOT_CONFIGURED" } });
+    const inspection = await app.inject({
+      method: "GET",
+      url: "/v1/auth/session",
+      headers: { authorization: "Bearer acs_registry_session" },
+    });
+    expect(inspection.statusCode).toBe(501);
     await app.close();
   });
 
@@ -573,6 +863,72 @@ describe("registry read API", () => {
       payload: { version: "1.0.0", idempotencyKey: "publish-cookie-1" },
     });
     expect(response.statusCode).toBe(201);
+    await app.close();
+  });
+
+  it("returns stable 429 responses with retry guidance for search", async () => {
+    let now = 1_000;
+    const app = buildRegistryApp({
+      repository: new InMemoryRegistryReleaseRepository([makeRelease()]),
+      rateLimiter: new InMemoryRegistryRateLimiter({ now: () => now }),
+      rateLimitPolicies: { search: { limit: 1, windowMs: 10_000 } },
+    });
+
+    const first = await app.inject({ method: "GET", url: "/v1/search?q=review" });
+    const second = await app.inject({ method: "GET", url: "/v1/search?q=another" });
+    expect(first.statusCode).toBe(200);
+    expect(first.headers["ratelimit-limit"]).toBe("1");
+    expect(first.headers["ratelimit-remaining"]).toBe("0");
+    expect(second.statusCode).toBe(429);
+    expect(second.headers["retry-after"]).toBe("10");
+    expect(second.headers["cache-control"]).toBe("no-store");
+    expect(second.json()).toMatchObject({ error: { code: "REGISTRY_RATE_LIMITED" } });
+
+    now = 11_000;
+    const afterWindow = await app.inject({ method: "GET", url: "/v1/search?q=review" });
+    expect(afterWindow.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it("throttles reporting mutations before authentication or persistence", async () => {
+    const moderation = new InMemoryRegistryModerationRepository();
+    const app = buildRegistryApp({
+      repository: new InMemoryRegistryReleaseRepository([makeRelease()]),
+      moderation,
+      resolveReporter: async () => ({ identity: { provider: "github", subject: "reporter-1" } }),
+      rateLimitPolicies: { reporting: { limit: 1, windowMs: 60_000 } },
+    });
+    const payload = {
+      target: { package: { namespace: "acme", name: "review" } },
+      category: "spam",
+      evidence: "Repeated unsolicited content.",
+      idempotencyKey: "rate-report-1",
+    };
+    const first = await app.inject({ method: "POST", url: "/v1/reports", payload });
+    const second = await app.inject({ method: "POST", url: "/v1/reports", payload: { ...payload, idempotencyKey: "rate-report-2" } });
+    expect(first.statusCode).toBe(201);
+    expect(second.statusCode).toBe(429);
+    expect(second.json()).toMatchObject({ error: { code: "REGISTRY_RATE_LIMITED" } });
+    await app.close();
+  });
+
+  it("fails closed when the publishing limiter is unavailable", async () => {
+    const app = buildRegistryApp({
+      repository: new InMemoryRegistryReleaseRepository([makeRelease()]),
+      rateLimiter: {
+        consume() {
+          throw new Error("limiter backend unavailable");
+        },
+      },
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/packages/acme/new-skill/releases",
+      payload: { version: "1.0.0", idempotencyKey: "rate-publish-1" },
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({ error: { code: "REGISTRY_RATE_LIMITER_UNAVAILABLE" } });
+    expect(response.body).not.toContain("limiter backend unavailable");
     await app.close();
   });
 });

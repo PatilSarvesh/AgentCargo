@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "source": "docs/PRD.md#12-success-metrics",
+  "collectionPolicy": {
+    "aggregateOnly": true,
+    "doNotCollect": ["provider tokens", "AgentCargo sessions", "signed URLs", "raw IP addresses", "package contents", "private skill instructions"],
+    "participantId": "Use a random feedback ID; do not use an email address as the metric key.",
+    "reviewCadence": "weekly during controlled beta"
+  },
+  "metrics": [
+    {
+      "id": "search_to_detail_rate",
+      "category": "activation",
+      "definition": "Distinct search sessions that open a package detail page divided by distinct search sessions with at least one result.",
+      "unit": "ratio",
+      "target": null
+    },
+    {
+      "id": "detail_to_install_intent_rate",
+      "category": "activation",
+      "definition": "Detail sessions that copy an install command or initiate CLI installation divided by detail sessions.",
+      "unit": "ratio",
+      "target": null
+    },
+    {
+      "id": "successful_install_rate",
+      "category": "activation",
+      "definition": "Successful installs divided by install attempts, segmented by host, scope, and operating system.",
+      "unit": "ratio",
+      "target": 0.95
+    },
+    {
+      "id": "first_install_completion_rate",
+      "category": "activation",
+      "definition": "New CLI users who complete at least one install divided by new CLI users.",
+      "unit": "ratio",
+      "target": null
+    },
+    {
+      "id": "successful_publication_rate",
+      "category": "activation",
+      "definition": "Releases activated after validation and scanning divided by publication attempts.",
+      "unit": "ratio",
+      "target": null
+    },
+    {
+      "id": "checksum_verification_pass_rate",
+      "category": "reliability",
+      "definition": "Downloads whose artifact digest verification passes divided by downloads reaching verification.",
+      "unit": "ratio",
+      "target": 0.99,
+      "action": "Any lower weekly value requires an integrity incident review."
+    },
+    {
+      "id": "metadata_request_p50_ms",
+      "category": "reliability",
+      "definition": "Median latency for registry metadata requests, excluding artifact transfer.",
+      "unit": "milliseconds",
+      "target": 500,
+      "comparison": "less-than-or-equal"
+    },
+    {
+      "id": "known_high_risk_issue_count",
+      "category": "reliability",
+      "definition": "Open known path-traversal, arbitrary-overwrite, token-exposure, or equivalent critical issues at beta review.",
+      "unit": "count",
+      "target": 0
+    },
+    {
+      "id": "manually_reviewed_seed_skills",
+      "category": "adoption",
+      "definition": "Maintained, manually reviewed starter skills available in the curated catalog.",
+      "unit": "count",
+      "target": 20
+    },
+    {
+      "id": "external_publishers",
+      "category": "adoption",
+      "definition": "Distinct external creators who publish successfully without maintainer intervention.",
+      "unit": "count",
+      "target": 10
+    },
+    {
+      "id": "external_successful_installs",
+      "category": "adoption",
+      "definition": "Successful installs completed by users outside the core project team.",
+      "unit": "count",
+      "target": 100
+    },
+    {
+      "id": "independent_contributions",
+      "category": "adoption",
+      "definition": "Community-contributed or independently maintained adapters or validation rules accepted after review.",
+      "unit": "count",
+      "target": 1
+    }
+  ],
+  "recordTemplate": {
+    "periodStart": "YYYY-MM-DD",
+    "periodEnd": "YYYY-MM-DD",
+    "metricId": "one metric id above",
+    "segment": "aggregate host/scope/os or all",
+    "numerator": 0,
+    "denominator": 0,
+    "value": null,
+    "sampleSize": 0,
+    "notes": "bounded, non-sensitive observation"
+  }
+}

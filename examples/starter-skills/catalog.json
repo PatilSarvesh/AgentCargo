@@ -1,0 +1,78 @@
+{
+  "catalogVersion": 1,
+  "maintainer": "AgentCargo Maintainers",
+  "reviewedAt": "2026-08-20",
+  "installPolicy": "explicit-selection",
+  "skills": [
+    {
+      "name": "code-review",
+      "version": "0.1.0",
+      "description": "Review code changes for correctness, maintainability, and delivery risk.",
+      "tags": ["code-review", "quality"],
+      "hosts": { "codex": ["project", "user"], "claude-code": ["project", "user"] }
+    },
+    {
+      "name": "test-writing",
+      "version": "0.1.0",
+      "description": "Design focused tests that protect behavior and make failures easy to diagnose.",
+      "tags": ["testing", "quality"],
+      "hosts": { "codex": ["project", "user"], "claude-code": ["project", "user"] }
+    },
+    {
+      "name": "documentation",
+      "version": "0.1.0",
+      "description": "Turn implementation details into clear documentation for users and maintainers.",
+      "tags": ["documentation", "writing"],
+      "hosts": { "codex": ["project", "user"], "claude-code": ["project", "user"] }
+    },
+    {
+      "name": "security-review",
+      "version": "0.1.0",
+      "description": "Inspect a change for trust boundaries, abuse cases, and actionable security findings.",
+      "tags": ["security", "review"],
+      "hosts": { "codex": ["project", "user"], "claude-code": ["project", "user"] }
+    },
+    {
+      "name": "git-pr-assistance",
+      "version": "0.1.0",
+      "description": "Prepare focused Git changes and pull requests with useful context and verification notes.",
+      "tags": ["git", "pull-request"],
+      "hosts": { "codex": ["project", "user"], "claude-code": ["project", "user"] }
+    },
+    {
+      "name": "react-review",
+      "version": "0.1.0",
+      "description": "Review React changes for state behavior, accessibility, performance, and maintainability.",
+      "tags": ["react", "frontend", "accessibility"],
+      "hosts": { "codex": ["project", "user"], "claude-code": ["project", "user"] }
+    },
+    {
+      "name": "backend-api-review",
+      "version": "0.1.0",
+      "description": "Review backend API changes for contracts, validation, authorization, and compatibility.",
+      "tags": ["backend", "api", "security"],
+      "hosts": { "codex": ["project", "user"], "claude-code": ["project", "user"] }
+    },
+    {
+      "name": "sql-review",
+      "version": "0.1.0",
+      "description": "Review SQL and database changes for correctness, migration safety, query behavior, and data integrity.",
+      "tags": ["database", "sql", "migration"],
+      "hosts": { "codex": ["project", "user"], "claude-code": ["project", "user"] }
+    },
+    {
+      "name": "incident-triage",
+      "version": "0.1.0",
+      "description": "Triage an operational incident into a bounded timeline, impact assessment, containment, and recovery plan.",
+      "tags": ["operations", "incident", "reliability"],
+      "hosts": { "codex": ["project", "user"], "claude-code": ["project", "user"] }
+    },
+    {
+      "name": "dependency-review",
+      "version": "0.1.0",
+      "description": "Review dependency changes for compatibility, maintenance risk, license obligations, and supply-chain exposure.",
+      "tags": ["dependencies", "supply-chain", "maintenance"],
+      "hosts": { "codex": ["project", "user"], "claude-code": ["project", "user"] }
+    }
+  ]
+}

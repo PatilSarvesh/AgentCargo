@@ -14,7 +14,9 @@ import type {
 } from "@agentcargo/registry-contract";
 import type {
   RegistryReleaseScanRepository,
+  RegistryDigestDenylistReader,
   RegistryScanJob,
+  RegistryScanQueueStats,
   RegistryScanJobRepository,
   RegistryScanRelease,
 } from "@agentcargo/registry-db";
@@ -30,6 +32,8 @@ export interface RegistryWorkerOptions {
   now?: () => Date;
   retryDelayMs?: number;
   tempDirectory?: string;
+  /** Required: activation must never run without an emergency denylist check. */
+  denylist: RegistryDigestDenylistReader;
 }
 
 export interface RegistryWorkerRunResult {
@@ -48,12 +52,13 @@ export class RegistryReleaseWorker {
   readonly #now: () => Date;
   readonly #retryDelayMs: number;
   readonly #tempDirectory: string | undefined;
+  readonly #denylist: RegistryDigestDenylistReader;
 
   constructor(
     private readonly jobs: RegistryScanJobRepository,
     private readonly releases: RegistryReleaseScanRepository,
     private readonly artifacts: RegistryArtifactFetcher,
-    options: RegistryWorkerOptions = {},
+    options: RegistryWorkerOptions,
   ) {
     this.#now = options.now ?? (() => new Date());
     this.#retryDelayMs = options.retryDelayMs ?? 30_000;
@@ -61,6 +66,10 @@ export class RegistryReleaseWorker {
       throw new RangeError("retryDelayMs must be a non-negative safe integer.");
     }
     this.#tempDirectory = options.tempDirectory;
+    this.#denylist = options.denylist;
+    if (!this.#denylist || typeof this.#denylist.isDigestDenylisted !== "function") {
+      throw new TypeError("A digest denylist reader is required for worker activation.");
+    }
   }
 
   async runOnce(): Promise<RegistryWorkerRunResult> {
@@ -83,6 +92,12 @@ export class RegistryReleaseWorker {
     }
   }
 
+  /** Return queue-only operational counters when the repository supports them. */
+  async queueStats(now = this.#now()): Promise<RegistryScanQueueStats | null> {
+    if (typeof this.jobs.getQueueStats !== "function") return null;
+    return this.jobs.getQueueStats(now);
+  }
+
   private async process(
     job: RegistryScanJob,
     input: RegistryScanRelease,
@@ -92,6 +107,9 @@ export class RegistryReleaseWorker {
     const artifactPath = path.join(parent, "artifact.agentcargo");
     const extractionPath = path.join(parent, input.coordinate.name);
     try {
+      if (await this.#denylist.isDigestDenylisted(input.completion.artifact.digest)) {
+        return this.reject(job, input, scanFailure("The artifact digest is on the emergency denylist.", now), "DIGEST_DENYLISTED", now);
+      }
       const body = await this.artifacts.download(input);
       if (body.byteLength !== input.completion.artifact.bytes) {
         return this.reject(job, input, scanFailure("Artifact byte count does not match completion metadata.", now), "ARTIFACT_SIZE_MISMATCH", now);
@@ -222,3 +240,12 @@ function canonicalJson(value: unknown): string {
 }
 
 export type { RegistryScanJob, RegistryScanRelease };
+export { RegistryReleaseWorkerScheduler, registryWorkerStatusSource } from "./scheduler.js";
+export type {
+  RegistryWorkerQueueHealth,
+  RegistryWorkerReadiness,
+  RegistryWorkerSchedulerFailureReason,
+  RegistryWorkerSchedulerHealth,
+  RegistryWorkerSchedulerOptions,
+  RegistryWorkerSchedulerState,
+} from "./scheduler.js";

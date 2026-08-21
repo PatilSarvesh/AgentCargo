@@ -1,0 +1,24 @@
+schema_version: 1
+name: test-writing
+version: 0.1.0
+description: Design focused tests that protect behavior and make failures easy to diagnose.
+license: Apache-2.0
+compatibility:
+  codex:
+    scopes:
+      - project
+      - user
+  claude-code:
+    scopes:
+      - project
+      - user
+capabilities:
+  filesystem:
+    read: true
+    write: false
+  shell: false
+  network: false
+  environment: []
+tags:
+  - testing
+  - quality

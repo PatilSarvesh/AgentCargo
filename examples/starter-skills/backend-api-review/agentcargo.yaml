@@ -1,0 +1,25 @@
+schema_version: 1
+name: backend-api-review
+version: 0.1.0
+description: Review backend API changes for contracts, validation, authorization, and compatibility.
+license: Apache-2.0
+compatibility:
+  codex:
+    scopes:
+      - project
+      - user
+  claude-code:
+    scopes:
+      - project
+      - user
+capabilities:
+  filesystem:
+    read: true
+    write: false
+  shell: false
+  network: false
+  environment: []
+tags:
+  - backend
+  - api
+  - security

@@ -47,6 +47,29 @@ const registryRelease = {
   },
 };
 
+const registryStatus = {
+  apiVersion: "v1",
+  generatedAt: "2026-08-20T00:00:00.000Z",
+  overall: "degraded",
+  components: {
+    api: { status: "operational", checkedAt: "2026-08-20T00:00:00.000Z" },
+    database: { status: "operational", checkedAt: "2026-08-20T00:00:00.000Z", detail: "Repository ready" },
+    storage: { status: "not_configured", checkedAt: "2026-08-20T00:00:00.000Z" },
+    worker: {
+      status: "degraded",
+      checkedAt: "2026-08-20T00:00:00.000Z",
+      ready: false,
+      reason: "queue-lag",
+      totalRuns: 4,
+      claimedJobs: 3,
+      consecutiveFailures: 1,
+      lastRunAgeMs: 1200,
+      queue: { queued: 2, failed: 1, running: 1, staleLeases: 0, oldestAvailableAt: "2026-08-20T00:00:00.000Z", lagMs: 1800 },
+    },
+    moderation: { status: "operational", checkedAt: "2026-08-20T00:00:00.000Z", activeDenylistEntries: 1 },
+  },
+};
+
 afterEach(async () => {
   process.exitCode = undefined;
   vi.restoreAllMocks();
@@ -106,6 +129,45 @@ describe("agentcargo registry read commands", () => {
     expect(fetch).toHaveBeenCalledTimes(3);
   });
 
+  it("prints public status as JSON and exits successfully for degraded availability", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const fetch = vi.fn(async (input: URL | RequestInfo) => {
+      expect(String(input)).toBe("https://registry.example.test/v1/status");
+      return new Response(JSON.stringify(registryStatus), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetch);
+
+    await program.parseAsync(["node", "agentcargo", "status", "--registry", "https://registry.example.test", "--json"]);
+
+    expect(process.exitCode).toBeUndefined();
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      ok: true,
+      overall: "degraded",
+      components: { worker: { ready: false, queue: { lagMs: 1800 } } },
+    });
+  });
+
+  it("returns a non-zero status for a registry outage and renders bounded worker details", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const outage = {
+      ...registryStatus,
+      overall: "outage",
+      components: {
+        ...registryStatus.components,
+        database: { status: "unavailable", checkedAt: "2026-08-20T00:00:00.000Z", detail: "Registry dependency unavailable." },
+      },
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(outage), { status: 200 })));
+
+    await program.parseAsync(["node", "agentcargo", "status", "--registry", "https://registry.example.test"]);
+
+    expect(process.exitCode).toBe(1);
+    const output = log.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(output).toContain("Registry status: OUTAGE");
+    expect(output).toContain("Queue: 2 queued, 1 running, 1 failed, 0 stale leases, 1800 ms lag");
+    expect(output).not.toContain("package");
+  });
+
   it("reports a stable error when no registry URL is configured", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     await program.parseAsync(["node", "agentcargo", "search", "review", "--json"]);
@@ -131,7 +193,7 @@ describe("agentcargo publish", () => {
     await store.set("https://registry.example.test", {
       provider: "github",
       tokenType: "bearer",
-      accessToken: "acs_publish_secret",
+      accessToken: "ghu_provider_secret",
       expiresAt: "2999-01-01T00:00:00.000Z",
     });
 
@@ -139,6 +201,20 @@ describe("agentcargo publish", () => {
     const fetch = vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => {
       const url = String(input);
       calls.push({ url, ...(init ? { init } : {}) });
+      if (url.endsWith("/v1/auth/github/session")) {
+        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer ghu_provider_secret");
+        expect(JSON.parse(String(init?.body))).toEqual({ scopes: ["publisher:write"] });
+        return new Response(JSON.stringify({
+          apiVersion: "v1",
+          session: {
+            accessToken: "acs_publish_session",
+            tokenType: "bearer",
+            expiresAt: "2999-01-01T00:00:00.000Z",
+            identity: { provider: "github", subject: "42", login: "octocat" },
+            scopes: ["publisher:write"],
+          },
+        }), { status: 201 });
+      }
       if (init?.method === "PUT") {
         expect(new Headers(init.headers).get("content-type")).toBe("application/vnd.agentcargo.ustar-v1");
         expect(new Headers(init.headers).get("x-amz-meta-digest")).toMatch(/^sha256:[a-f0-9]{64}$/);
@@ -146,7 +222,7 @@ describe("agentcargo publish", () => {
         return new Response(null, { status: 200 });
       }
       if (url.endsWith("/releases")) {
-        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer acs_publish_secret");
+        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer acs_publish_session");
         return new Response(JSON.stringify({
           apiVersion: "v1",
           releaseId: "release-publish-1",
@@ -157,6 +233,7 @@ describe("agentcargo publish", () => {
         }), { status: 201 });
       }
       if (url.endsWith("/upload-url")) {
+        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer acs_publish_session");
         const body = JSON.parse(String(init?.body)) as { digest: string; bytes: number };
         return new Response(JSON.stringify({
           apiVersion: "v1",
@@ -171,7 +248,7 @@ describe("agentcargo publish", () => {
       const body = JSON.parse(String(init?.body)) as {
         artifact: { format: string; mediaType: string; digest: string; bytes: number };
       };
-      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer acs_publish_secret");
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer acs_publish_session");
       return new Response(JSON.stringify({
         apiVersion: "v1",
         releaseId: "release-publish-1",
@@ -204,8 +281,99 @@ describe("agentcargo publish", () => {
       coordinate: { namespace: "acme", name: "publish-skill", version: "0.1.0" },
       status: "scanning",
     });
-    expect(output).not.toContain("acs_publish_secret");
-    expect(calls).toHaveLength(4);
+    expect(output).not.toContain("ghu_provider_secret");
+    expect(output).not.toContain("acs_publish_session");
+    expect(calls).toHaveLength(5);
+  });
+
+  it("fails closed when the registry does not issue publisher-write scope", async () => {
+    const root = await createTemporaryDirectory();
+    vi.stubEnv("AGENTCARGO_CONFIG_DIR", root);
+    await new FileRegistryCredentialStore().set("https://registry.example.test", {
+      provider: "github",
+      tokenType: "bearer",
+      accessToken: "ghu_provider_secret",
+      expiresAt: "2999-01-01T00:00:00.000Z",
+    });
+    const fetch = vi.fn(async () => new Response(JSON.stringify({
+      apiVersion: "v1",
+      session: {
+        accessToken: "acs_read_session",
+        tokenType: "bearer",
+        expiresAt: "2999-01-01T00:00:00.000Z",
+        identity: { provider: "github", subject: "42", login: "octocat" },
+        scopes: ["publisher:read"],
+      },
+    }), { status: 201 }));
+    vi.stubGlobal("fetch", fetch);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await program.parseAsync([
+      "node",
+      "agentcargo",
+      "publish",
+      ".",
+      "--namespace",
+      "acme",
+      "--registry",
+      "https://registry.example.test",
+      "--json",
+    ]);
+
+    const output = String(log.mock.calls[0]?.[0]);
+    expect(process.exitCode).toBe(1);
+    expect(JSON.parse(output)).toMatchObject({
+      ok: false,
+      error: { code: "AUTH_SESSION_SCOPE_INVALID" },
+    });
+    expect(output).not.toContain("ghu_provider_secret");
+    expect(output).not.toContain("acs_read_session");
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed when the registry issues an expired publisher session", async () => {
+    const root = await createTemporaryDirectory();
+    vi.stubEnv("AGENTCARGO_CONFIG_DIR", root);
+    await new FileRegistryCredentialStore().set("https://registry.example.test", {
+      provider: "github",
+      tokenType: "bearer",
+      accessToken: "ghu_provider_secret",
+      expiresAt: "2999-01-01T00:00:00.000Z",
+    });
+    const fetch = vi.fn(async () => new Response(JSON.stringify({
+      apiVersion: "v1",
+      session: {
+        accessToken: "acs_expired_session",
+        tokenType: "bearer",
+        expiresAt: "2000-01-01T00:00:00.000Z",
+        identity: { provider: "github", subject: "42", login: "octocat" },
+        scopes: ["publisher:write"],
+      },
+    }), { status: 201 }));
+    vi.stubGlobal("fetch", fetch);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await program.parseAsync([
+      "node",
+      "agentcargo",
+      "publish",
+      ".",
+      "--namespace",
+      "acme",
+      "--registry",
+      "https://registry.example.test",
+      "--json",
+    ]);
+
+    const output = String(log.mock.calls[0]?.[0]);
+    expect(process.exitCode).toBe(1);
+    expect(JSON.parse(output)).toMatchObject({
+      ok: false,
+      error: { code: "AUTH_SESSION_EXPIRED" },
+    });
+    expect(output).not.toContain("ghu_provider_secret");
+    expect(output).not.toContain("acs_expired_session");
+    expect(fetch).toHaveBeenCalledOnce();
   });
 });
 

@@ -1,6 +1,7 @@
 import type { ChatGPTUser } from "./chatgpt-auth";
 
 export const PUBLISHER_READ_SCOPE = "publisher:read" as const;
+export const PUBLISHER_WRITE_SCOPE = "publisher:write" as const;
 export const REGISTRY_SESSION_STATUS_PATH = "/api/registry-session" as const;
 export const REGISTRY_SESSION_COOKIE_NAME = "agentcargo_session" as const;
 
@@ -32,6 +33,13 @@ export type RegistryReadSession = {
 
 export type RegistryReadSessionMetadata = Pick<RegistryReadSession, "expiresAt" | "scopes">;
 
+export type RegistryWriteSession = {
+  accessToken: string;
+  tokenType: "bearer";
+  expiresAt: string;
+  scopes: readonly [typeof PUBLISHER_WRITE_SCOPE];
+};
+
 export type RegistryProviderCredentialResolver = (input: {
   request: Request;
   workspaceIdentity: ChatGPTUser;
@@ -41,6 +49,11 @@ export type RegistryReadSessionExchange = (
   providerToken: string,
   options: { scopes: readonly [typeof PUBLISHER_READ_SCOPE] },
 ) => Promise<RegistryReadSession | null>;
+
+export type RegistryWriteSessionExchange = (
+  providerToken: string,
+  options: { scopes: readonly [typeof PUBLISHER_WRITE_SCOPE] },
+) => Promise<RegistryWriteSession | null>;
 
 export type RegistryReadSessionResolver = (input: {
   request: Request;
@@ -58,6 +71,12 @@ export type RegistryReadSessionResult =
   | { state: "missing-provider-credential" }
   | { state: "exchange-failed" }
   | { state: "issued"; session: RegistryReadSession };
+
+export type RegistryWriteSessionResult =
+  | { state: "unconfigured" }
+  | { state: "missing-provider-credential" }
+  | { state: "exchange-failed" }
+  | { state: "issued"; session: RegistryWriteSession };
 
 export type BrowserRegistrySessionInspection =
   | { state: "absent" }
@@ -127,6 +146,38 @@ export async function issueBrowserReadSession(
 }
 
 /**
+ * Issue a write-only session for one server-side publication mutation. The
+ * session is returned to the caller for immediate use and is never serialized
+ * into a browser cookie or response.
+ */
+export async function issueServerWriteSession(
+  request: Request,
+  workspaceIdentity: ChatGPTUser,
+  config: {
+    resolveProviderCredential: RegistryProviderCredentialResolver;
+    exchange: RegistryWriteSessionExchange;
+  } | null,
+): Promise<RegistryWriteSessionResult> {
+  if (!config) return { state: "unconfigured" };
+
+  let providerToken: string | null;
+  try {
+    providerToken = await config.resolveProviderCredential({ request, workspaceIdentity });
+  } catch {
+    return { state: "missing-provider-credential" };
+  }
+  if (!isSafeCredential(providerToken)) return { state: "missing-provider-credential" };
+
+  let session: RegistryWriteSession | null;
+  try {
+    session = await config.exchange(providerToken, { scopes: [PUBLISHER_WRITE_SCOPE] });
+  } catch {
+    return { state: "exchange-failed" };
+  }
+  return isValidWriteSession(session) ? { state: "issued", session } : { state: "exchange-failed" };
+}
+
+/**
  * Resolve an opaque browser cookie through the host-owned registry session
  * store. The cookie is never treated as proof by itself and the resolver's
  * response is reduced to read-only metadata before it crosses this boundary.
@@ -187,6 +238,13 @@ function isSafeCredential(value: string | null): value is string {
 function isValidReadSession(value: RegistryReadSession | null): value is RegistryReadSession {
   if (!value || !isSafeCredential(value.accessToken) || value.tokenType !== "bearer") return false;
   return isValidReadSessionMetadata(value);
+}
+
+function isValidWriteSession(value: RegistryWriteSession | null): value is RegistryWriteSession {
+  if (!value || !isSafeCredential(value.accessToken) || value.tokenType !== "bearer") return false;
+  if (!Array.isArray(value.scopes) || value.scopes.length !== 1 || value.scopes[0] !== PUBLISHER_WRITE_SCOPE) return false;
+  const expiresAt = Date.parse(value.expiresAt);
+  return typeof value.expiresAt === "string" && Number.isFinite(expiresAt) && expiresAt > Date.now();
 }
 
 function isValidReadSessionMetadata(value: RegistryReadSessionMetadata | null): value is RegistryReadSessionMetadata {

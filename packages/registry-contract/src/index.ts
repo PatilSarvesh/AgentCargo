@@ -53,8 +53,217 @@ export interface RegistryAuthSessionResponse {
   session: RegistryAuthSession;
 }
 
+/** Token-free metadata returned when a registry session is introspected. */
+export interface RegistryAuthSessionMetadata {
+  expiresAt: string;
+  scopes: readonly RegistrySessionScope[];
+}
+
+export interface RegistryAuthSessionMetadataResponse {
+  apiVersion: RegistryApiVersion;
+  session: RegistryAuthSessionMetadata;
+}
+
 export interface RegistryAuthSessionRequest {
   scopes?: readonly RegistrySessionScope[];
+}
+
+export type RegistryOperationalStatus = "operational" | "degraded" | "unavailable" | "not_configured";
+export type RegistryStatusOverall = "operational" | "degraded" | "outage";
+
+export interface RegistryStatusComponent {
+  status: RegistryOperationalStatus;
+  checkedAt: string;
+  detail?: string;
+}
+
+export interface RegistryStatusQueue {
+  queued: number;
+  failed: number;
+  running: number;
+  staleLeases: number;
+  oldestAvailableAt: string | null;
+  lagMs: number;
+}
+
+export interface RegistryStatusWorkerComponent extends RegistryStatusComponent {
+  ready: boolean;
+  reason: string;
+  totalRuns: number;
+  claimedJobs: number;
+  consecutiveFailures: number;
+  lastRunAgeMs: number | null;
+  queue: RegistryStatusQueue | null;
+}
+
+export interface RegistryStatusModerationComponent extends RegistryStatusComponent {
+  activeDenylistEntries: number | null;
+}
+
+export interface RegistryStatusResponse {
+  apiVersion: RegistryApiVersion;
+  generatedAt: string;
+  overall: RegistryStatusOverall;
+  components: {
+    api: RegistryStatusComponent;
+    database: RegistryStatusComponent;
+    storage: RegistryStatusComponent;
+    worker: RegistryStatusWorkerComponent;
+    moderation: RegistryStatusModerationComponent;
+  };
+}
+
+export type RegistryPublisherReleaseStatus =
+  | "reserved"
+  | "expired"
+  | "uploading"
+  | "uploaded"
+  | "scanning"
+  | "active"
+  | "deprecated"
+  | "quarantined"
+  | "rejected";
+
+/** Authenticated publisher view of one immutable release reservation. */
+export interface RegistryPublisherReleaseSummary {
+  releaseId: string;
+  version: string;
+  status: RegistryPublisherReleaseStatus;
+  createdAt: string;
+  expiresAt: string;
+  digest?: Sha256Digest;
+  completedAt?: string;
+  publishedAt?: string;
+}
+
+export interface RegistryPublisherPackageHistory {
+  package: RegistryPackageCoordinate;
+  latestVersion?: string;
+  releases: readonly RegistryPublisherReleaseSummary[];
+}
+
+export interface RegistryPublisherNamespaceSummary {
+  namespace: string;
+  packages: readonly RegistryPublisherPackageHistory[];
+}
+
+export interface RegistryPublisherWorkspaceResponse {
+  apiVersion: RegistryApiVersion;
+  namespaces: readonly RegistryPublisherNamespaceSummary[];
+}
+
+export type RegistryReportCategory = "malware" | "impersonation" | "spam" | "copyright" | "policy" | "other";
+export type RegistryReportStatus = "open" | "triaged" | "resolved" | "dismissed";
+export type RegistryModerationAuditAction =
+  | "report_created"
+  | "report_triaged"
+  | "report_resolved"
+  | "report_dismissed"
+  | "release_deprecated"
+  | "release_quarantined"
+  | "release_unquarantined"
+  | "digest_denylisted"
+  | "digest_denylist_removed";
+
+/** A package or exact release selected as the subject of an abuse report. */
+export interface RegistryReportTarget {
+  package: RegistryPackageCoordinate;
+  releaseVersion?: string;
+}
+
+export interface RegistryReportRequest {
+  target: RegistryReportTarget;
+  category: RegistryReportCategory;
+  evidence: string;
+  idempotencyKey: string;
+}
+
+export interface RegistryReport {
+  apiVersion: RegistryApiVersion;
+  reportId: string;
+  target: RegistryReportTarget;
+  category: RegistryReportCategory;
+  status: RegistryReportStatus;
+  evidence: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type RegistryReleaseModerationOperation = "deprecate" | "quarantine" | "unquarantine";
+
+export interface RegistryReleaseModerationRequest {
+  reason: string;
+  idempotencyKey: string;
+}
+
+export interface RegistryReleaseModerationResponse {
+  apiVersion: RegistryApiVersion;
+  coordinate: RegistryReleaseCoordinate;
+  operation: RegistryReleaseModerationOperation;
+  status: RegistryReleaseStatus;
+  changedAt: string;
+  auditEventId: string;
+}
+
+export interface RegistryDigestDenylistEntry {
+  digest: Sha256Digest;
+  reason: string;
+  addedAt: string;
+}
+
+export interface RegistryDigestDenylistResponse {
+  apiVersion: RegistryApiVersion;
+  items: readonly RegistryDigestDenylistEntry[];
+}
+
+export type RegistryDigestDenylistAction = "add" | "remove";
+
+export interface RegistryDigestDenylistMutationRequest {
+  action: RegistryDigestDenylistAction;
+  digest: Sha256Digest;
+  reason: string;
+  idempotencyKey: string;
+}
+
+export interface RegistryDigestDenylistMutationResponse {
+  apiVersion: RegistryApiVersion;
+  action: RegistryDigestDenylistAction;
+  digest: Sha256Digest;
+  active: boolean;
+  changedAt: string;
+  auditEventId: string;
+}
+
+export interface RegistryModerationActor {
+  kind: "publisher" | "maintainer" | "system";
+  identity?: RegistryPublisherIdentity;
+}
+
+export type RegistryModerationAuditTarget =
+  | { type: "report"; reportId: string }
+  | { type: "package"; package: RegistryPackageCoordinate }
+  | { type: "release"; release: RegistryReleaseCoordinate }
+  | { type: "artifact"; digest: Sha256Digest };
+
+export interface RegistryModerationAuditEvent {
+  eventId: string;
+  action: RegistryModerationAuditAction;
+  actor: RegistryModerationActor;
+  target: RegistryModerationAuditTarget;
+  occurredAt: string;
+  requestId: string;
+  metadata: Readonly<Record<string, string>>;
+}
+
+export interface RegistryModerationAuditEventListRequest {
+  cursor?: string;
+  limit?: number;
+}
+
+export interface RegistryModerationAuditEventListResponse {
+  apiVersion: RegistryApiVersion;
+  items: readonly RegistryModerationAuditEvent[];
+  nextCursor?: string;
 }
 
 export interface RegistryReleaseReservationRequest {

@@ -7,14 +7,46 @@ import {
   formatReleaseCoordinate,
   validateRegistryRelease,
   validateRegistryReleaseCompletionRequest,
+  validateRegistryModerationAuditEventListResponse,
+  validateRegistryReport,
+  validateRegistryReportRequest,
+  validateRegistryReleaseCoordinate,
+  validateRegistryReleaseModerationRequest,
+  validateRegistryReleaseModerationResponse,
+  validateRegistryDigestDenylistMutationRequest,
+  validateRegistryDigestDenylistMutationResponse,
+  validateRegistryDigestDenylistResponse,
   validateRegistryPublisherIdentity,
+  validateRegistryPublisherWorkspaceResponse,
   validateRegistrySearchResponse,
   type RegistryAuthSession,
+  type RegistryModerationAuditEvent,
+  type RegistryModerationAuditEventListRequest,
+  type RegistryModerationAuditEventListResponse,
+  type RegistryModerationAuditTarget,
+  type RegistryReport,
+  type RegistryReportRequest,
+  type RegistryReportTarget,
+  type RegistryReportStatus,
+  type RegistryReportCategory,
+  type RegistryReleaseModerationOperation,
+  type RegistryReleaseModerationRequest,
+  type RegistryReleaseModerationResponse,
+  type RegistryReleaseStatus,
+  type RegistryDigestDenylistAction,
+  type RegistryDigestDenylistMutationRequest,
+  type RegistryDigestDenylistMutationResponse,
+  type RegistryDigestDenylistResponse,
+  type RegistryDigestDenylistEntry,
   type RegistryReleaseCompletionRequest,
   type RegistryReleaseCompletionResponse,
   type RegistryPackageCoordinate,
   type RegistryPackageSummary,
   type RegistryPublisherIdentity,
+  type RegistryPublisherPackageHistory,
+  type RegistryPublisherReleaseSummary,
+  type RegistryPublisherReleaseStatus,
+  type RegistryPublisherWorkspaceResponse,
   type RegistryRelease,
   type RegistryReleaseCoordinate,
   type RegistryReleaseReservation,
@@ -86,6 +118,15 @@ export interface RegistryScanJob {
   leaseUntil: string;
 }
 
+/** Queue-only operational counters; this shape never contains package data. */
+export interface RegistryScanQueueStats {
+  queued: number;
+  failed: number;
+  running: number;
+  staleLeases: number;
+  oldestAvailableAt: string | null;
+}
+
 export interface RegistryScanRelease {
   releaseId: string;
   coordinate: RegistryReleaseCoordinate;
@@ -98,6 +139,7 @@ export interface RegistryScanJobRepository {
   claim(now?: Date, leaseMs?: number): Promise<RegistryScanJob | null>;
   succeed(jobId: string, scan: RegistryScanSummary, now?: Date): Promise<void>;
   fail(jobId: string, message: string, retryAt: Date, now?: Date): Promise<void>;
+  getQueueStats?(now?: Date): Promise<RegistryScanQueueStats>;
 }
 
 export interface RegistryReleaseScanRepository {
@@ -112,7 +154,8 @@ export class RegistryScanJobError extends Error {
       | "REGISTRY_SCAN_JOB_NOT_FOUND"
       | "REGISTRY_SCAN_RELEASE_NOT_FOUND"
       | "REGISTRY_SCAN_ACTIVATION_CONFLICT"
-      | "REGISTRY_SCAN_INVALID",
+      | "REGISTRY_SCAN_INVALID"
+      | "REGISTRY_SCAN_DENYLISTED",
     message: string,
   ) {
     super(message);
@@ -135,11 +178,68 @@ export interface RegistryNamespaceRepository {
   claimNamespace(input: RegistryNamespaceClaimInput): Promise<RegistryNamespaceClaimResult>;
 }
 
+export interface RegistryPublisherWorkspaceRepository {
+  getWorkspace(actor: RegistryPublisherIdentity): Promise<RegistryPublisherWorkspaceResponse>;
+}
+
+export interface RegistryReportInput {
+  actor: RegistryPublisherIdentity;
+  request: RegistryReportRequest;
+  requestId: string;
+  now?: Date;
+}
+
+export interface RegistryReportResult {
+  report: RegistryReport;
+  replayed: boolean;
+}
+
+export interface RegistryReleaseModerationInput {
+  actor: RegistryPublisherIdentity;
+  actorKind: "publisher" | "maintainer";
+  coordinate: RegistryReleaseCoordinate;
+  operation: RegistryReleaseModerationOperation;
+  request: RegistryReleaseModerationRequest;
+  requestId: string;
+  now?: Date;
+}
+
+export interface RegistryReleaseModerationResult {
+  response: RegistryReleaseModerationResponse;
+  replayed: boolean;
+}
+
+export interface RegistryDigestDenylistMutationInput {
+  actor: RegistryPublisherIdentity;
+  request: RegistryDigestDenylistMutationRequest;
+  requestId: string;
+  now?: Date;
+}
+
+export interface RegistryDigestDenylistMutationResult {
+  response: RegistryDigestDenylistMutationResponse;
+  replayed: boolean;
+}
+
+export interface RegistryDigestDenylistReader {
+  isDigestDenylisted(digest: string): Promise<boolean>;
+}
+
+export interface RegistryModerationRepository extends RegistryDigestDenylistReader {
+  createReport(input: RegistryReportInput): Promise<RegistryReportResult>;
+  moderateRelease(input: RegistryReleaseModerationInput): Promise<RegistryReleaseModerationResult>;
+  mutateDenylist(input: RegistryDigestDenylistMutationInput): Promise<RegistryDigestDenylistMutationResult>;
+  listDenylistedDigests(): Promise<RegistryDigestDenylistResponse>;
+  isDigestDenylisted(digest: string): Promise<boolean>;
+  listAuditEvents(input: RegistryModerationAuditEventListRequest): Promise<RegistryModerationAuditEventListResponse>;
+}
+
 export interface RegistryAuthSessionRow {
   provider: string;
   subject: string;
   login: string | null;
   scopes?: readonly string[];
+  expires_at: string | Date;
 }
 
 /** Durable PostgreSQL session adapter for the API's provider-to-registry handoff. */
@@ -191,11 +291,11 @@ export class PostgresRegistrySessionStore {
     return context?.identity ?? null;
   }
 
-  async resolveContext(accessToken: string): Promise<{ identity: RegistryPublisherIdentity; scopes: readonly RegistrySessionScope[] } | null> {
+  async resolveContext(accessToken: string): Promise<{ identity: RegistryPublisherIdentity; expiresAt: string; scopes: readonly RegistrySessionScope[] } | null> {
     const token = safeSessionToken(accessToken);
     if (!token) return null;
     const result = await this.query<RegistryAuthSessionRow>(
-      `SELECT sessions.provider, sessions.subject, publishers.login, sessions.scopes
+      `SELECT sessions.provider, sessions.subject, publishers.login, sessions.scopes, sessions.expires_at
        FROM registry_auth_sessions AS sessions
        JOIN registry_publishers AS publishers
          ON publishers.provider = sessions.provider AND publishers.subject = sessions.subject
@@ -208,14 +308,22 @@ export class PostgresRegistrySessionStore {
     if (!row || row.provider !== "github") return null;
     const scopes = normalizeStoredSessionScopes(row.scopes);
     if (!scopes) return null;
+    const expiresAt = dateValue(row.expires_at);
+    if (Date.parse(expiresAt) <= this.#now()) return null;
     return {
       identity: {
         provider: "github",
         subject: row.subject,
         ...(row.login === null ? {} : { login: row.login }),
       },
+      expiresAt,
       scopes,
     };
+  }
+
+  async inspect(accessToken: string): Promise<{ expiresAt: string; scopes: readonly RegistrySessionScope[] } | null> {
+    const context = await this.resolveContext(accessToken);
+    return context ? { expiresAt: context.expiresAt, scopes: [...context.scopes] } : null;
   }
 
   async revoke(accessToken: string): Promise<boolean> {
@@ -321,6 +429,7 @@ export type RegistryArtifactDownloadFactory = (
 export interface RegistryReleaseRow {
   release_json: unknown;
   artifact_key: string;
+  status?: "active" | "deprecated";
 }
 
 export interface RegistryPackageRow {
@@ -357,6 +466,90 @@ interface RegistryReleaseUploadRow extends RegistryReleaseReservationRow {
   completed_at: string | Date | null;
 }
 
+interface RegistryPublisherWorkspaceRow {
+  namespace: string;
+  release_id: string | null;
+  name: string | null;
+  version: string | null;
+  reservation_created_at: string | Date | null;
+  expires_at: string | Date | null;
+  upload_status: "reserved" | "uploaded" | "scanning" | "rejected" | null;
+  digest: string | null;
+  completed_at: string | Date | null;
+  public_status: "reserved" | "uploaded" | "scanning" | "active" | "deprecated" | "quarantined" | "rejected" | null;
+  published_at: string | Date | null;
+}
+
+interface RegistryReportRow {
+  report_id: string;
+  namespace: string;
+  name: string;
+  release_version: string | null;
+  category: RegistryReportCategory;
+  status: RegistryReportStatus;
+  evidence: string;
+  created_at: string | Date;
+  updated_at: string | Date;
+}
+
+interface RegistryModerationAuditEventRow {
+  event_id: string;
+  action: RegistryModerationAuditEvent["action"];
+  actor_kind: RegistryModerationAuditEvent["actor"]["kind"];
+  actor_provider: string | null;
+  actor_subject: string | null;
+  target_type: RegistryModerationAuditTarget["type"];
+  target_report_id: string | null;
+  target_namespace: string | null;
+  target_name: string | null;
+  target_version: string | null;
+  target_digest: string | null;
+  occurred_at: string | Date;
+  request_id: string;
+  idempotency_key: string | null;
+  metadata_json: unknown;
+}
+
+interface RegistryReleaseModerationRow {
+  namespace: string;
+  name: string;
+  version: string;
+  status: RegistryReleaseStatus;
+  changed_at: string | Date;
+  audit_event_id: string;
+}
+
+interface RegistryReleaseModerationAuditRow {
+  event_id: string;
+  action: RegistryModerationAuditEvent["action"];
+  occurred_at: string | Date;
+  metadata_json: unknown;
+}
+
+interface RegistryDigestDenylistRow {
+  digest: string;
+  reason: string;
+  added_at: string | Date;
+  updated_at?: string | Date;
+  active?: boolean;
+}
+
+interface RegistryDenylistAuditRow {
+  event_id: string;
+  action: RegistryModerationAuditEvent["action"];
+  occurred_at: string | Date;
+  metadata_json: unknown;
+}
+
+interface RegistryDenylistMutationRow {
+  digest: string;
+  reason?: string;
+  added_at?: string | Date;
+  active: boolean;
+  changed_at: string | Date;
+  audit_event_id: string;
+}
+
 interface RegistryScanJobRow {
   job_id: string;
   release_id: string;
@@ -374,13 +567,46 @@ interface RegistryScanReleaseRow {
   completion_json: unknown;
 }
 
+interface RegistryScanQueueStatsRow {
+  queued: number | string;
+  failed: number | string;
+  running: number | string;
+  stale_leases: number | string;
+  oldest_available_at: string | Date | null;
+}
+
 export class RegistryRepositoryError extends Error {
   constructor(
-    public readonly code: "REGISTRY_ROW_INVALID" | "REGISTRY_SEARCH_RESULT_INVALID" | "REGISTRY_DB_QUERY_FAILED",
+    public readonly code:
+      | "REGISTRY_ROW_INVALID"
+      | "REGISTRY_SEARCH_RESULT_INVALID"
+      | "REGISTRY_DB_QUERY_FAILED"
+      | "REGISTRY_MODERATION_RESULT_INVALID",
     message: string,
   ) {
     super(message);
     this.name = "RegistryRepositoryError";
+  }
+}
+
+export class RegistryModerationError extends Error {
+  constructor(
+    public readonly code:
+      | "REGISTRY_REPORT_IDEMPOTENCY_CONFLICT"
+      | "REGISTRY_REPORT_INVALID"
+      | "REGISTRY_AUDIT_EVENT_INVALID"
+      | "REGISTRY_RELEASE_MODERATION_INVALID"
+      | "REGISTRY_RELEASE_MODERATION_FORBIDDEN"
+      | "REGISTRY_RELEASE_MODERATION_NOT_FOUND"
+      | "REGISTRY_RELEASE_MODERATION_CONFLICT"
+      | "REGISTRY_RELEASE_MODERATION_IDEMPOTENCY_CONFLICT"
+      | "REGISTRY_DIGEST_DENYLIST_INVALID"
+      | "REGISTRY_DIGEST_DENYLIST_IDEMPOTENCY_CONFLICT"
+      | "REGISTRY_DIGEST_DENYLIST_CONFLICT",
+    message: string,
+  ) {
+    super(message);
+    this.name = "RegistryModerationError";
   }
 }
 
@@ -501,6 +727,553 @@ export class PostgresRegistryNamespaceRepository implements RegistryNamespaceRep
       return { namespace: owner.namespace, created: false };
     }
     throw new RegistryNamespaceError("REGISTRY_NAMESPACE_OWNED", "That namespace is already owned by another publisher.");
+  }
+
+  private async query<Row>(text: string, values: readonly unknown[]): Promise<RegistrySqlResult<Row>> {
+    return queryRegistry(this.client, text, values);
+  }
+}
+
+/** Authenticated, read-only package and immutable version history for one publisher. */
+export class PostgresRegistryPublisherWorkspaceRepository implements RegistryPublisherWorkspaceRepository {
+  readonly #now: () => number;
+
+  constructor(
+    private readonly client: RegistrySqlClient,
+    options: { now?: () => number } = {},
+  ) {
+    this.#now = options.now ?? (() => Date.now());
+  }
+
+  async getWorkspace(actor: RegistryPublisherIdentity): Promise<RegistryPublisherWorkspaceResponse> {
+    const identity = validateRegistryPublisherIdentity(actor);
+    if (!identity.valid) throw new TypeError("Cannot load a workspace for an invalid publisher identity.");
+    const result = await this.query<RegistryPublisherWorkspaceRow>(
+      `SELECT namespaces.namespace,
+              reservations.release_id, reservations.name, reservations.version,
+              reservations.created_at AS reservation_created_at, reservations.expires_at,
+              uploads.status AS upload_status, uploads.digest, uploads.completed_at,
+              public_releases.status AS public_status, public_releases.published_at
+       FROM registry_namespaces AS namespaces
+       LEFT JOIN registry_release_reservations AS reservations
+         ON reservations.namespace = namespaces.namespace
+        AND reservations.publisher_provider = namespaces.owner_provider
+        AND reservations.publisher_subject = namespaces.owner_subject
+       LEFT JOIN registry_release_uploads AS uploads
+         ON uploads.release_id = reservations.release_id
+       LEFT JOIN registry_public_releases AS public_releases
+         ON public_releases.namespace = reservations.namespace
+        AND public_releases.name = reservations.name
+        AND public_releases.version = reservations.version
+       WHERE namespaces.owner_provider = $1 AND namespaces.owner_subject = $2
+       ORDER BY namespaces.namespace ASC, reservations.name ASC,
+                reservations.created_at DESC NULLS LAST, reservations.version DESC NULLS LAST`,
+      [identity.value.provider, identity.value.subject],
+    );
+
+    let response: RegistryPublisherWorkspaceResponse;
+    try {
+      response = publisherWorkspaceFromRows(result.rows, this.#now());
+    } catch (error) {
+      if (error instanceof RegistryRepositoryError) throw error;
+      throw new RegistryRepositoryError(
+        "REGISTRY_ROW_INVALID",
+        error instanceof Error ? `Publisher workspace row is invalid: ${error.message}` : "Publisher workspace row is invalid.",
+      );
+    }
+    const validation = validateRegistryPublisherWorkspaceResponse(response);
+    if (!validation.valid) {
+      throw new RegistryRepositoryError(
+        "REGISTRY_ROW_INVALID",
+        `Publisher workspace row is invalid: ${validation.issues[0]?.message ?? "unknown error"}`,
+      );
+    }
+    return validation.value;
+  }
+
+  private async query<Row>(text: string, values: readonly unknown[]): Promise<RegistrySqlResult<Row>> {
+    return queryRegistry(this.client, text, values);
+  }
+}
+
+/** In-memory moderation semantics for API tests and local development. */
+export class InMemoryRegistryModerationRepository implements RegistryModerationRepository {
+  readonly #reports = new Map<string, { fingerprint: string; report: RegistryReport }>();
+  readonly #events: RegistryModerationAuditEvent[] = [];
+  readonly #releases = new Map<string, { status: RegistryReleaseStatus; quarantinePreviousStatus?: "active" | "deprecated" }>();
+  readonly #releaseOwners: ReadonlyMap<string, string>;
+  readonly #releaseOperations = new Map<string, { fingerprint: string; response: RegistryReleaseModerationResponse }>();
+  readonly #denylist = new Map<string, RegistryDigestDenylistEntry>();
+  readonly #denylistOperations = new Map<string, { fingerprint: string; response: RegistryDigestDenylistMutationResponse }>();
+
+  constructor(options: {
+    releases?: readonly { coordinate: RegistryReleaseCoordinate; status?: RegistryReleaseStatus }[];
+    releaseOwners?: Readonly<Record<string, string>>;
+  } = {}) {
+    for (const release of options.releases ?? []) {
+      this.#releases.set(formatReleaseCoordinate(release.coordinate), { status: release.status ?? "active" });
+    }
+    this.#releaseOwners = new Map(Object.entries(options.releaseOwners ?? {}));
+  }
+
+  async createReport(input: RegistryReportInput): Promise<RegistryReportResult> {
+    const request = validateModerationInput(input);
+    const actorKey = `${input.actor.provider}:${input.actor.subject}`;
+    const key = `${actorKey}:${request.idempotencyKey}`;
+    const fingerprint = JSON.stringify({ target: request.target, category: request.category, evidence: request.evidence });
+    const existing = this.#reports.get(key);
+    if (existing) {
+      if (existing.fingerprint !== fingerprint) {
+        throw new RegistryModerationError("REGISTRY_REPORT_IDEMPOTENCY_CONFLICT", "The report idempotency key was already used for different evidence.");
+      }
+      return { report: structuredClone(existing.report), replayed: true };
+    }
+    const timestamp = (input.now ?? new Date()).toISOString();
+    const report: RegistryReport = {
+      apiVersion: REGISTRY_API_VERSION,
+      reportId: randomUUID(),
+      target: structuredClone(request.target),
+      category: request.category,
+      status: "open",
+      evidence: request.evidence,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    this.#reports.set(key, { fingerprint, report });
+    this.#events.unshift({
+      eventId: randomUUID(),
+      action: "report_created",
+      actor: { kind: "publisher", identity: clonePublisherIdentity(input.actor) },
+      target: { type: "report", reportId: report.reportId },
+      occurredAt: timestamp,
+      requestId: input.requestId,
+      metadata: { category: report.category, targetType: report.target.releaseVersion ? "release" : "package" },
+    });
+    return { report: structuredClone(report), replayed: false };
+  }
+
+  async moderateRelease(input: RegistryReleaseModerationInput): Promise<RegistryReleaseModerationResult> {
+    const request = validateReleaseModerationInput(input);
+    const key = `${input.actor.provider}:${input.actor.subject}:${input.operation}:${formatReleaseCoordinate(input.coordinate)}:${request.idempotencyKey}`;
+    const fingerprint = JSON.stringify({ reason: request.reason, coordinate: input.coordinate, operation: input.operation });
+    const existingOperation = this.#releaseOperations.get(key);
+    if (existingOperation) {
+      if (existingOperation.fingerprint !== fingerprint) {
+        throw new RegistryModerationError("REGISTRY_RELEASE_MODERATION_IDEMPOTENCY_CONFLICT", "The release moderation idempotency key was already used for a different operation.");
+      }
+      return { response: structuredClone(existingOperation.response), replayed: true };
+    }
+    const coordinateKey = formatReleaseCoordinate(input.coordinate);
+    const release = this.#releases.get(coordinateKey);
+    if (!release) throw new RegistryModerationError("REGISTRY_RELEASE_MODERATION_NOT_FOUND", "The release was not found.");
+    if (input.operation === "deprecate" && this.#releaseOwners.get(input.coordinate.namespace) !== undefined && this.#releaseOwners.get(input.coordinate.namespace) !== `${input.actor.provider}:${input.actor.subject}`) {
+      throw new RegistryModerationError("REGISTRY_RELEASE_MODERATION_FORBIDDEN", "The publisher does not own this release namespace.");
+    }
+    const previousStatus = release.status;
+    if (input.operation === "deprecate") {
+      if (release.status !== "active") throw new RegistryModerationError("REGISTRY_RELEASE_MODERATION_CONFLICT", "Only an active release can be deprecated.");
+      release.status = "deprecated";
+    } else if (input.operation === "quarantine") {
+      if (release.status !== "active" && release.status !== "deprecated") throw new RegistryModerationError("REGISTRY_RELEASE_MODERATION_CONFLICT", "Only a public release can be quarantined.");
+      release.quarantinePreviousStatus = release.status;
+      release.status = "quarantined";
+    } else {
+      if (release.status !== "quarantined") throw new RegistryModerationError("REGISTRY_RELEASE_MODERATION_CONFLICT", "Only a quarantined release can be restored.");
+      release.status = release.quarantinePreviousStatus ?? "active";
+      delete release.quarantinePreviousStatus;
+    }
+    const changedAt = (input.now ?? new Date()).toISOString();
+    const response: RegistryReleaseModerationResponse = {
+      apiVersion: REGISTRY_API_VERSION,
+      coordinate: structuredClone(input.coordinate),
+      operation: input.operation,
+      status: release.status,
+      changedAt,
+      auditEventId: randomUUID(),
+    };
+    this.#releaseOperations.set(key, { fingerprint, response });
+    this.#events.unshift({
+      eventId: response.auditEventId,
+      action: releaseModerationAuditAction(input.operation),
+      actor: { kind: input.actorKind, identity: clonePublisherIdentity(input.actor) },
+      target: { type: "release", release: structuredClone(input.coordinate) },
+      occurredAt: changedAt,
+      requestId: input.requestId,
+      metadata: { reason: request.reason, operation: input.operation, previousStatus },
+    });
+    return { response: structuredClone(response), replayed: false };
+  }
+
+  async mutateDenylist(input: RegistryDigestDenylistMutationInput): Promise<RegistryDigestDenylistMutationResult> {
+    const request = validateDenylistInput(input);
+    const key = `${input.actor.provider}:${input.actor.subject}:${request.idempotencyKey}`;
+    const fingerprint = JSON.stringify(request);
+    const existing = this.#denylistOperations.get(key);
+    if (existing) {
+      if (existing.fingerprint !== fingerprint) throw new RegistryModerationError("REGISTRY_DIGEST_DENYLIST_IDEMPOTENCY_CONFLICT", "The denylist idempotency key was already used for a different digest operation.");
+      return { response: structuredClone(existing.response), replayed: true };
+    }
+    const timestamp = (input.now ?? new Date()).toISOString();
+    if (request.action === "add") {
+      this.#denylist.set(request.digest, { digest: request.digest, reason: request.reason, addedAt: timestamp });
+    } else {
+      this.#denylist.delete(request.digest);
+    }
+    const response: RegistryDigestDenylistMutationResponse = {
+      apiVersion: REGISTRY_API_VERSION,
+      action: request.action,
+      digest: request.digest,
+      active: request.action === "add",
+      changedAt: timestamp,
+      auditEventId: randomUUID(),
+    };
+    this.#denylistOperations.set(key, { fingerprint, response });
+    this.#events.unshift({
+      eventId: response.auditEventId,
+      action: request.action === "add" ? "digest_denylisted" : "digest_denylist_removed",
+      actor: { kind: "maintainer", identity: clonePublisherIdentity(input.actor) },
+      target: { type: "artifact", digest: request.digest },
+      occurredAt: timestamp,
+      requestId: input.requestId,
+      metadata: { reason: request.reason, action: request.action, active: String(response.active) },
+    });
+    return { response: structuredClone(response), replayed: false };
+  }
+
+  async listDenylistedDigests(): Promise<RegistryDigestDenylistResponse> {
+    const response: RegistryDigestDenylistResponse = {
+      apiVersion: REGISTRY_API_VERSION,
+      items: [...this.#denylist.values()].sort((left, right) => left.digest.localeCompare(right.digest)).map((entry) => structuredClone(entry)),
+    };
+    const validation = validateRegistryDigestDenylistResponse(response);
+    if (!validation.valid) throw new RegistryRepositoryError("REGISTRY_MODERATION_RESULT_INVALID", validation.issues[0]?.message ?? "Invalid digest denylist.");
+    return validation.value;
+  }
+
+  async isDigestDenylisted(digest: string): Promise<boolean> {
+    if (!/^sha256:[a-f0-9]{64}$/.test(digest)) throw new RegistryModerationError("REGISTRY_DIGEST_DENYLIST_INVALID", "The digest is invalid.");
+    return this.#denylist.has(digest);
+  }
+
+  async listAuditEvents(input: RegistryModerationAuditEventListRequest): Promise<RegistryModerationAuditEventListResponse> {
+    const limit = Math.min(Math.max(input.limit ?? 20, 1), 100);
+    const offset = decodeCursor(input.cursor);
+    const items = this.#events.slice(offset, offset + limit + 1);
+    return {
+      apiVersion: REGISTRY_API_VERSION,
+      items: structuredClone(items.slice(0, limit)),
+      ...(items.length > limit ? { nextCursor: encodeCursor(offset + limit) } : {}),
+    };
+  }
+}
+
+/** PostgreSQL-backed report intake and append-only moderation audit reads. */
+export class PostgresRegistryModerationRepository implements RegistryModerationRepository {
+  constructor(private readonly client: RegistrySqlClient) {}
+
+  async createReport(input: RegistryReportInput): Promise<RegistryReportResult> {
+    const request = validateModerationInput(input);
+    const reportId = randomUUID();
+    const eventId = randomUUID();
+    const createdAt = (input.now ?? new Date()).toISOString();
+    const targetType = request.target.releaseVersion ? "release" : "package";
+    const metadata = JSON.stringify({ category: request.category, targetType });
+    const inserted = await this.query<RegistryReportRow>(
+      `WITH inserted AS (
+         INSERT INTO registry_reports
+           (report_id, namespace, name, release_version, category, status, evidence,
+            reporter_provider, reporter_subject, idempotency_key, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, 'open', $6, $7, $8, $9, $10, $10)
+         ON CONFLICT (reporter_provider, reporter_subject, idempotency_key) DO NOTHING
+         RETURNING report_id, namespace, name, release_version, category, status, evidence, created_at, updated_at
+       ), audit AS (
+         INSERT INTO registry_moderation_audit_events
+           (event_id, action, actor_kind, actor_provider, actor_subject, target_type,
+            target_report_id, occurred_at, request_id, metadata_json)
+         SELECT $11, 'report_created', 'publisher', $7, $8, 'report', report_id, $10, $12, $13::jsonb
+         FROM inserted
+         RETURNING event_id
+       )
+       SELECT inserted.* FROM inserted CROSS JOIN audit`,
+      [
+        reportId,
+        request.target.package.namespace,
+        request.target.package.name,
+        request.target.releaseVersion ?? null,
+        request.category,
+        request.evidence,
+        input.actor.provider,
+        input.actor.subject,
+        request.idempotencyKey,
+        createdAt,
+        eventId,
+        input.requestId,
+        metadata,
+      ],
+    );
+    const insertedRow = inserted.rows[0];
+    if (insertedRow) return { report: reportFromRow(insertedRow), replayed: false };
+
+    const existing = await this.query<RegistryReportRow & { reporter_provider: string; reporter_subject: string; idempotency_key: string }>(
+      `SELECT report_id, namespace, name, release_version, category, status, evidence, created_at, updated_at,
+              reporter_provider, reporter_subject, idempotency_key
+       FROM registry_reports
+       WHERE reporter_provider = $1 AND reporter_subject = $2 AND idempotency_key = $3`,
+      [input.actor.provider, input.actor.subject, request.idempotencyKey],
+    );
+    const row = existing.rows[0];
+    if (!row) throw new RegistryModerationError("REGISTRY_REPORT_INVALID", "The report replay could not be resolved.");
+    const report = reportFromRow(row);
+    const existingFingerprint = JSON.stringify({ target: report.target, category: report.category, evidence: report.evidence });
+    if (existingFingerprint !== JSON.stringify({ target: request.target, category: request.category, evidence: request.evidence })) {
+      throw new RegistryModerationError("REGISTRY_REPORT_IDEMPOTENCY_CONFLICT", "The report idempotency key was already used for different evidence.");
+    }
+    return { report, replayed: true };
+  }
+
+  async moderateRelease(input: RegistryReleaseModerationInput): Promise<RegistryReleaseModerationResult> {
+    const request = validateReleaseModerationInput(input);
+    const eventId = randomUUID();
+    const changedAt = (input.now ?? new Date()).toISOString();
+    const action = releaseModerationAuditAction(input.operation);
+    const metadata = JSON.stringify({ reason: request.reason, operation: input.operation });
+    const updated = await this.query<RegistryReleaseModerationRow>(
+      `WITH updated AS (
+         UPDATE registry_public_releases AS releases
+         SET status = CASE $4
+               WHEN 'deprecate' THEN 'deprecated'
+               WHEN 'quarantine' THEN 'quarantined'
+               ELSE COALESCE(releases.quarantine_previous_status, 'active')
+             END,
+             quarantine_previous_status = CASE $4
+               WHEN 'quarantine' THEN releases.status
+               ELSE NULL
+             END
+         WHERE releases.namespace = $1 AND releases.name = $2 AND releases.version = $3
+           AND (
+             ($4 = 'deprecate' AND releases.status = 'active'
+              AND EXISTS (
+                SELECT 1 FROM registry_namespaces AS namespaces
+                WHERE namespaces.namespace = releases.namespace
+                  AND namespaces.owner_provider = $8
+                  AND namespaces.owner_subject = $9
+              ))
+             OR ($4 = 'quarantine' AND releases.status IN ('active', 'deprecated'))
+             OR ($4 = 'unquarantine' AND releases.status = 'quarantined')
+           )
+         RETURNING releases.namespace, releases.name, releases.version, releases.status,
+                   $10::timestamptz AS changed_at
+       ), audit AS (
+         INSERT INTO registry_moderation_audit_events
+           (event_id, action, actor_kind, actor_provider, actor_subject, target_type,
+            target_namespace, target_name, target_version, occurred_at, request_id,
+            idempotency_key, metadata_json)
+         SELECT $5, $6, $7, $8, $9, 'release', namespace, name, version,
+                $10, $11, $12,
+                jsonb_set($13::jsonb, '{resultStatus}', to_jsonb(updated.status), true)
+         FROM updated
+         ON CONFLICT DO NOTHING
+         RETURNING event_id
+       )
+       SELECT updated.namespace, updated.name, updated.version, updated.status,
+              updated.changed_at, audit.event_id AS audit_event_id
+       FROM updated CROSS JOIN audit`,
+      [
+        input.coordinate.namespace,
+        input.coordinate.name,
+        input.coordinate.version,
+        input.operation,
+        eventId,
+        action,
+        input.actorKind,
+        input.actor.provider,
+        input.actor.subject,
+        changedAt,
+        input.requestId,
+        request.idempotencyKey,
+        metadata,
+      ],
+    );
+    const row = updated.rows[0];
+    if (row) {
+      const response = releaseModerationResponseFromRow(row, input.operation);
+      return { response, replayed: false };
+    }
+
+    const existingAudit = await this.query<RegistryReleaseModerationAuditRow>(
+      `SELECT event_id, action, occurred_at, metadata_json
+       FROM registry_moderation_audit_events
+       WHERE actor_kind = $1 AND actor_provider = $2 AND actor_subject = $3
+         AND target_type = 'release' AND target_namespace = $4 AND target_name = $5
+         AND target_version = $6 AND idempotency_key = $7
+       LIMIT 1`,
+      [input.actorKind, input.actor.provider, input.actor.subject, input.coordinate.namespace, input.coordinate.name, input.coordinate.version, request.idempotencyKey],
+    );
+    const audit = existingAudit.rows[0];
+    const current = await this.query<{ status: RegistryReleaseStatus; quarantine_previous_status: "active" | "deprecated" | null }>(
+      `SELECT status, quarantine_previous_status
+       FROM registry_public_releases
+       WHERE namespace = $1 AND name = $2 AND version = $3
+       LIMIT 1`,
+      [input.coordinate.namespace, input.coordinate.name, input.coordinate.version],
+    );
+    const currentRow = current.rows[0];
+    if (!currentRow) throw new RegistryModerationError("REGISTRY_RELEASE_MODERATION_NOT_FOUND", "The release was not found.");
+    if (audit) {
+      if (audit.action !== action) throw new RegistryModerationError("REGISTRY_RELEASE_MODERATION_IDEMPOTENCY_CONFLICT", "The release moderation idempotency key was already used for a different operation.");
+      const response = releaseModerationResponseFromRow({
+        namespace: input.coordinate.namespace,
+        name: input.coordinate.name,
+        version: input.coordinate.version,
+        status: moderationResultStatus(audit.metadata_json, currentRow.status),
+        changed_at: audit.occurred_at,
+        audit_event_id: audit.event_id,
+      }, input.operation);
+      return { response, replayed: true };
+    }
+    if (input.operation === "deprecate") {
+      const owner = await this.query<{ namespace: string }>(
+        `SELECT namespace FROM registry_namespaces
+         WHERE namespace = $1 AND owner_provider = $2 AND owner_subject = $3
+         LIMIT 1`,
+        [input.coordinate.namespace, input.actor.provider, input.actor.subject],
+      );
+      if (!owner.rows[0]) throw new RegistryModerationError("REGISTRY_RELEASE_MODERATION_FORBIDDEN", "The publisher does not own this release namespace.");
+    }
+    throw new RegistryModerationError("REGISTRY_RELEASE_MODERATION_CONFLICT", `The release cannot transition from ${currentRow.status}.`);
+  }
+
+  async mutateDenylist(input: RegistryDigestDenylistMutationInput): Promise<RegistryDigestDenylistMutationResult> {
+    const request = validateDenylistInput(input);
+    const eventId = randomUUID();
+    const changedAt = (input.now ?? new Date()).toISOString();
+    const action = request.action === "add" ? "digest_denylisted" : "digest_denylist_removed";
+    const metadata = JSON.stringify({ reason: request.reason, action: request.action, active: request.action === "add" });
+    const changed = await this.query<RegistryDenylistMutationRow>(
+      request.action === "add"
+        ? `WITH changed AS (
+             INSERT INTO registry_digest_denylist (digest, reason, active, added_at, updated_at)
+             VALUES ($1, $2, true, $3, $3)
+             ON CONFLICT (digest) DO UPDATE
+             SET reason = EXCLUDED.reason, active = true, updated_at = EXCLUDED.updated_at
+             RETURNING digest, reason, added_at, active
+           ), audit AS (
+             INSERT INTO registry_moderation_audit_events
+               (event_id, action, actor_kind, actor_provider, actor_subject, target_type,
+                target_digest, occurred_at, request_id, idempotency_key, metadata_json)
+             SELECT $4, $5, 'maintainer', $6, $7, 'artifact', digest,
+                    $3, $8, $9, $10::jsonb
+             FROM changed
+             ON CONFLICT DO NOTHING
+             RETURNING event_id
+           )
+           SELECT changed.digest, changed.reason, changed.added_at, changed.active,
+                  $3::timestamptz AS changed_at, audit.event_id AS audit_event_id
+           FROM changed CROSS JOIN audit`
+        : `WITH changed AS (
+             UPDATE registry_digest_denylist
+             SET active = false, updated_at = $3
+             WHERE digest = $1 AND active = true
+             RETURNING digest, reason, added_at, active
+           ), audit AS (
+             INSERT INTO registry_moderation_audit_events
+               (event_id, action, actor_kind, actor_provider, actor_subject, target_type,
+                target_digest, occurred_at, request_id, idempotency_key, metadata_json)
+             SELECT $4, $5, 'maintainer', $6, $7, 'artifact', digest,
+                    $3, $8, $9, $10::jsonb
+             FROM changed
+             ON CONFLICT DO NOTHING
+             RETURNING event_id
+           )
+           SELECT changed.digest, changed.reason, changed.added_at, changed.active,
+                  $3::timestamptz AS changed_at, audit.event_id AS audit_event_id
+           FROM changed CROSS JOIN audit`,
+      [request.digest, request.reason, changedAt, eventId, action, input.actor.provider, input.actor.subject, input.requestId, request.idempotencyKey, metadata],
+    );
+    const row = changed.rows[0];
+    if (row) return { response: denylistMutationResponseFromRow(row, request.action), replayed: false };
+
+    const existingAudit = await this.query<RegistryDenylistAuditRow>(
+      `SELECT event_id, action, occurred_at, metadata_json
+       FROM registry_moderation_audit_events
+       WHERE actor_kind = 'maintainer' AND actor_provider = $1 AND actor_subject = $2
+         AND target_type = 'artifact' AND target_digest = $3 AND idempotency_key = $4
+       LIMIT 1`,
+      [input.actor.provider, input.actor.subject, request.digest, request.idempotencyKey],
+    );
+    const audit = existingAudit.rows[0];
+    const current = await this.query<RegistryDigestDenylistRow>(
+      `SELECT digest, reason, added_at, active
+       FROM registry_digest_denylist
+       WHERE digest = $1
+       LIMIT 1`,
+      [request.digest],
+    );
+    const currentRow = current.rows[0];
+    if (audit) {
+      const expectedAction = request.action === "add" ? "digest_denylisted" : "digest_denylist_removed";
+      if (audit.action !== expectedAction) throw new RegistryModerationError("REGISTRY_DIGEST_DENYLIST_IDEMPOTENCY_CONFLICT", "The denylist idempotency key was already used for a different action.");
+      return {
+        response: denylistMutationResponseFromRow({
+          digest: request.digest,
+          active: denylistResultActive(audit.metadata_json, currentRow?.active ?? false),
+          changed_at: audit.occurred_at,
+          audit_event_id: audit.event_id,
+        }, request.action),
+        replayed: true,
+      };
+    }
+    throw new RegistryModerationError("REGISTRY_DIGEST_DENYLIST_CONFLICT", currentRow?.active ? "The digest denylist operation could not be committed." : "The digest is not active on the denylist.");
+  }
+
+  async listDenylistedDigests(): Promise<RegistryDigestDenylistResponse> {
+    const result = await this.query<RegistryDigestDenylistRow>(
+      `SELECT digest, reason, added_at
+       FROM registry_digest_denylist
+       WHERE active = true
+       ORDER BY digest ASC
+       LIMIT 1000`,
+      [],
+    );
+    const response: RegistryDigestDenylistResponse = {
+      apiVersion: REGISTRY_API_VERSION,
+      items: result.rows.map((row) => ({ digest: row.digest as `sha256:${string}`, reason: row.reason, addedAt: dateValue(row.added_at) })),
+    };
+    const validation = validateRegistryDigestDenylistResponse(response);
+    if (!validation.valid) throw new RegistryRepositoryError("REGISTRY_MODERATION_RESULT_INVALID", validation.issues[0]?.message ?? "Invalid digest denylist.");
+    return validation.value;
+  }
+
+  async isDigestDenylisted(digest: string): Promise<boolean> {
+    if (!/^sha256:[a-f0-9]{64}$/.test(digest)) throw new RegistryModerationError("REGISTRY_DIGEST_DENYLIST_INVALID", "The digest is invalid.");
+    const result = await this.query<{ active: boolean }>(
+      `SELECT active FROM registry_digest_denylist WHERE digest = $1 AND active = true LIMIT 1`,
+      [digest],
+    );
+    return Boolean(result.rows[0]?.active);
+  }
+
+  async listAuditEvents(input: RegistryModerationAuditEventListRequest): Promise<RegistryModerationAuditEventListResponse> {
+    const limit = Math.min(Math.max(input.limit ?? 20, 1), 100);
+    const offset = decodeCursor(input.cursor);
+    const result = await this.query<RegistryModerationAuditEventRow>(
+      `SELECT event_id, action, actor_kind, actor_provider, actor_subject, target_type,
+              target_report_id, target_namespace, target_name, target_version, target_digest,
+              occurred_at, request_id, idempotency_key, metadata_json
+       FROM registry_moderation_audit_events
+       ORDER BY occurred_at DESC, event_id DESC
+       LIMIT $1 OFFSET $2`,
+      [limit + 1, offset],
+    );
+    const events = result.rows.map((row) => auditEventFromRow(row));
+    const response: RegistryModerationAuditEventListResponse = {
+      apiVersion: REGISTRY_API_VERSION,
+      items: events.slice(0, limit),
+      ...(events.length > limit ? { nextCursor: encodeCursor(offset + limit) } : {}),
+    };
+    const validation = validateRegistryModerationAuditEventListResponse(response);
+    if (!validation.valid) throw new RegistryRepositoryError("REGISTRY_MODERATION_RESULT_INVALID", validation.issues[0]?.message ?? "Invalid moderation audit result.");
+    return validation.value;
   }
 
   private async query<Row>(text: string, values: readonly unknown[]): Promise<RegistrySqlResult<Row>> {
@@ -887,6 +1660,28 @@ export class PostgresRegistryScanJobRepository implements RegistryScanJobReposit
     }
   }
 
+  async getQueueStats(now = new Date()): Promise<RegistryScanQueueStats> {
+    const result = await this.query<RegistryScanQueueStatsRow>(
+      `SELECT
+         COUNT(*) FILTER (WHERE status = 'queued') AS queued,
+         COUNT(*) FILTER (WHERE status = 'failed') AS failed,
+         COUNT(*) FILTER (WHERE status = 'running') AS running,
+         COUNT(*) FILTER (WHERE status = 'running' AND lease_until <= $1) AS stale_leases,
+         MIN(available_at) FILTER (WHERE status IN ('queued', 'failed') AND available_at <= $1) AS oldest_available_at
+       FROM registry_scan_jobs`,
+      [now.toISOString()],
+    );
+    const row = result.rows[0];
+    if (!row) throw new RegistryRepositoryError("REGISTRY_ROW_INVALID", "The scan queue returned no statistics row.");
+    return {
+      queued: queueCount(row.queued),
+      failed: queueCount(row.failed),
+      running: queueCount(row.running),
+      staleLeases: queueCount(row.stale_leases),
+      oldestAvailableAt: row.oldest_available_at === null ? null : dateValue(row.oldest_available_at),
+    };
+  }
+
   private async query<Row>(text: string, values: readonly unknown[]): Promise<RegistrySqlResult<Row>> {
     return queryRegistry(this.client, text, values);
   }
@@ -894,6 +1689,15 @@ export class PostgresRegistryScanJobRepository implements RegistryScanJobReposit
 
 /** PostgreSQL release input and public-projection boundary for the worker. */
 export class PostgresRegistryReleaseScanRepository implements RegistryReleaseScanRepository {
+  constructor(
+    private readonly client: RegistrySqlClient,
+    private readonly denylist: RegistryDigestDenylistReader,
+  ) {
+    if (!denylist || typeof denylist.isDigestDenylisted !== "function") {
+      throw new TypeError("A digest denylist reader is required for release activation.");
+    }
+  }
+
   async getForScan(releaseId: string): Promise<RegistryScanRelease | null> {
     const result = await this.query<RegistryScanReleaseRow>(
       `SELECT uploads.release_id, reservations.namespace, reservations.name, reservations.version,
@@ -924,6 +1728,9 @@ export class PostgresRegistryReleaseScanRepository implements RegistryReleaseSca
     const validation = validateRegistryRelease(release);
     if (!validation.valid || release.status !== "active") {
       throw new RegistryScanJobError("REGISTRY_SCAN_INVALID", "The worker produced an invalid active release.");
+    }
+    if (await this.denylist.isDigestDenylisted(release.artifact.digest)) {
+      throw new RegistryScanJobError("REGISTRY_SCAN_DENYLISTED", "The release artifact digest is on the emergency denylist.");
     }
     const reservation = await this.query<{ namespace: string; name: string; version: string }>(
       `SELECT reservations.namespace, reservations.name, reservations.version
@@ -1036,18 +1843,19 @@ export class PostgresRegistryReleaseScanRepository implements RegistryReleaseSca
     return queryRegistry(this.client, text, values);
   }
 
-  constructor(private readonly client: RegistrySqlClient) {}
 }
 
 export class InMemoryRegistryReleaseRepository implements RegistryReleaseRepository {
   readonly #releases: RegistryRelease[];
+  readonly #denylist: RegistryDigestDenylistReader | undefined;
 
-  constructor(releases: readonly RegistryRelease[]) {
+  constructor(releases: readonly RegistryRelease[], options: { denylist?: RegistryDigestDenylistReader } = {}) {
     this.#releases = releases.map((release) => cloneRelease(release));
+    this.#denylist = options.denylist;
   }
 
   async getPackage(coordinate: RegistryPackageCoordinate): Promise<RegistryPackageSummary | null> {
-    const matching = this.#releases.filter(
+    const matching = (await this.publicReleases()).filter(
       (release) =>
         release.coordinate.namespace === coordinate.namespace && release.coordinate.name === coordinate.name,
     );
@@ -1055,18 +1863,19 @@ export class InMemoryRegistryReleaseRepository implements RegistryReleaseReposit
   }
 
   async getRelease(coordinate: RegistryReleaseCoordinate): Promise<RegistryRelease | null> {
-    const release = this.#releases.find(
+    const release = (await this.publicReleases()).find(
       (candidate) =>
         candidate.coordinate.namespace === coordinate.namespace &&
         candidate.coordinate.name === coordinate.name &&
-        candidate.coordinate.version === coordinate.version,
+        candidate.coordinate.version === coordinate.version &&
+        (candidate.status === "active" || candidate.status === "deprecated"),
     );
     return release ? cloneRelease(release) : null;
   }
 
   async search(request: RegistrySearchRequest): Promise<RegistrySearchResponse> {
     const query = request.query.toLocaleLowerCase();
-    const matching = this.#releases.filter((release) => {
+    const matching = (await this.publicReleases()).filter((release) => {
       const compatibleHosts = request.host
         ? [release.declared.compatibility[request.host]].filter((entry): entry is { scopes: readonly ("project" | "user")[] } => Boolean(entry))
         : Object.values(release.declared.compatibility);
@@ -1089,6 +1898,16 @@ export class InMemoryRegistryReleaseRepository implements RegistryReleaseReposit
       ...(offset + limit < summaries.length ? { nextCursor: encodeCursor(offset + limit) } : {}),
     };
   }
+
+  private async publicReleases(): Promise<RegistryRelease[]> {
+    const releases = this.#releases.filter((release) => release.status === "active" || release.status === "deprecated");
+    if (!this.#denylist) return releases;
+    const allowed: RegistryRelease[] = [];
+    for (const release of releases) {
+      if (!(await this.#denylist.isDigestDenylisted(release.artifact.digest))) allowed.push(release);
+    }
+    return allowed;
+  }
 }
 
 export class PostgresRegistryReleaseRepository implements RegistryReleaseRepository {
@@ -1102,6 +1921,16 @@ export class PostgresRegistryReleaseRepository implements RegistryReleaseReposit
       `SELECT package_json
        FROM registry_public_packages
        WHERE namespace = $1 AND name = $2 AND status IN ('active', 'deprecated')
+         AND EXISTS (
+           SELECT 1 FROM registry_public_releases AS releases
+           WHERE releases.namespace = registry_public_packages.namespace
+             AND releases.name = registry_public_packages.name
+             AND releases.status IN ('active', 'deprecated')
+             AND NOT EXISTS (
+               SELECT 1 FROM registry_digest_denylist AS denylist
+               WHERE denylist.digest = releases.artifact_digest AND denylist.active = true
+             )
+         )
        LIMIT 1`,
       [coordinate.namespace, coordinate.name],
     );
@@ -1112,10 +1941,14 @@ export class PostgresRegistryReleaseRepository implements RegistryReleaseReposit
 
   async getRelease(coordinate: RegistryReleaseCoordinate): Promise<RegistryRelease | null> {
     const result = await this.query<RegistryReleaseRow>(
-      `SELECT release_json, artifact_key
+      `SELECT release_json, artifact_key, status
        FROM registry_public_releases
        WHERE namespace = $1 AND name = $2 AND version = $3
          AND status IN ('active', 'deprecated')
+         AND NOT EXISTS (
+           SELECT 1 FROM registry_digest_denylist AS denylist
+           WHERE denylist.digest = registry_public_releases.artifact_digest AND denylist.active = true
+         )
        LIMIT 1`,
       [coordinate.namespace, coordinate.name, coordinate.version],
     );
@@ -1125,6 +1958,7 @@ export class PostgresRegistryReleaseRepository implements RegistryReleaseReposit
     const download = await this.createArtifactDownload({ digest: release.artifact.digest, artifactKey: row.artifact_key });
     return {
       ...release,
+      status: row.status ?? release.status,
       artifact: { ...release.artifact, download },
     };
   }
@@ -1134,6 +1968,16 @@ export class PostgresRegistryReleaseRepository implements RegistryReleaseReposit
       `SELECT package_json
        FROM registry_public_packages
        WHERE status IN ('active', 'deprecated')
+         AND EXISTS (
+           SELECT 1 FROM registry_public_releases AS releases
+           WHERE releases.namespace = registry_public_packages.namespace
+             AND releases.name = registry_public_packages.name
+             AND releases.status IN ('active', 'deprecated')
+             AND NOT EXISTS (
+               SELECT 1 FROM registry_digest_denylist AS denylist
+               WHERE denylist.digest = releases.artifact_digest AND denylist.active = true
+             )
+         )
          AND (
            search_text @@ plainto_tsquery('simple', $1)
            OR search_document LIKE '%' || lower($1) || '%'
@@ -1189,6 +2033,222 @@ async function queryRegistry<Row>(
   }
 }
 
+function validateModerationInput(input: RegistryReportInput): RegistryReportRequest {
+  const identity = validateRegistryPublisherIdentity(input.actor);
+  if (!identity.valid) throw new RegistryModerationError("REGISTRY_REPORT_INVALID", "The report actor identity is invalid.");
+  const request = validateRegistryReportRequest(input.request);
+  if (!request.valid) throw new RegistryModerationError("REGISTRY_REPORT_INVALID", request.issues[0]?.message ?? "The report request is invalid.");
+  if (typeof input.requestId !== "string" || input.requestId.length < 1 || input.requestId.length > 128 || /[\u0000-\u001f\u007f]/.test(input.requestId)) {
+    throw new RegistryModerationError("REGISTRY_REPORT_INVALID", "The report request ID is invalid.");
+  }
+  return request.value;
+}
+
+function validateReleaseModerationInput(input: RegistryReleaseModerationInput): RegistryReleaseModerationRequest {
+  const identity = validateRegistryPublisherIdentity(input.actor);
+  if (!identity.valid) throw new RegistryModerationError("REGISTRY_RELEASE_MODERATION_INVALID", "The release moderation actor identity is invalid.");
+  if (input.actorKind !== "publisher" && input.actorKind !== "maintainer") {
+    throw new RegistryModerationError("REGISTRY_RELEASE_MODERATION_INVALID", "The release moderation actor kind is invalid.");
+  }
+  if (input.operation !== "deprecate" && input.operation !== "quarantine" && input.operation !== "unquarantine") {
+    throw new RegistryModerationError("REGISTRY_RELEASE_MODERATION_INVALID", "The release moderation operation is invalid.");
+  }
+  const coordinate = validateRegistryReleaseCoordinate(input.coordinate);
+  if (!coordinate.valid) throw new RegistryModerationError("REGISTRY_RELEASE_MODERATION_INVALID", coordinate.issues[0]?.message ?? "The release coordinate is invalid.");
+  const request = validateRegistryReleaseModerationRequest(input.request);
+  if (!request.valid) throw new RegistryModerationError("REGISTRY_RELEASE_MODERATION_INVALID", request.issues[0]?.message ?? "The release moderation request is invalid.");
+  if (typeof input.requestId !== "string" || input.requestId.length < 1 || input.requestId.length > 128 || /[\u0000-\u001f\u007f]/.test(input.requestId)) {
+    throw new RegistryModerationError("REGISTRY_RELEASE_MODERATION_INVALID", "The release moderation request ID is invalid.");
+  }
+  return request.value;
+}
+
+function moderationResultStatus(metadata: unknown, fallback: RegistryReleaseStatus): RegistryReleaseStatus {
+  let value: unknown = metadata;
+  if (typeof value === "string") {
+    try { value = JSON.parse(value); } catch { value = null; }
+  }
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    const resultStatus = (value as Record<string, unknown>).resultStatus;
+    if (resultStatus === "active" || resultStatus === "deprecated" || resultStatus === "quarantined") return resultStatus;
+  }
+  return fallback;
+}
+
+function validateDenylistInput(input: RegistryDigestDenylistMutationInput): RegistryDigestDenylistMutationRequest {
+  const identity = validateRegistryPublisherIdentity(input.actor);
+  if (!identity.valid) throw new RegistryModerationError("REGISTRY_DIGEST_DENYLIST_INVALID", "The denylist actor identity is invalid.");
+  const request = validateRegistryDigestDenylistMutationRequest(input.request);
+  if (!request.valid) throw new RegistryModerationError("REGISTRY_DIGEST_DENYLIST_INVALID", request.issues[0]?.message ?? "The denylist request is invalid.");
+  if (typeof input.requestId !== "string" || input.requestId.length < 1 || input.requestId.length > 128 || /[\u0000-\u001f\u007f]/.test(input.requestId)) {
+    throw new RegistryModerationError("REGISTRY_DIGEST_DENYLIST_INVALID", "The denylist request ID is invalid.");
+  }
+  return request.value;
+}
+
+function releaseModerationAuditAction(operation: RegistryReleaseModerationOperation): RegistryModerationAuditEvent["action"] {
+  if (operation === "deprecate") return "release_deprecated";
+  if (operation === "quarantine") return "release_quarantined";
+  return "release_unquarantined";
+}
+
+function releaseModerationResponseFromRow(row: RegistryReleaseModerationRow, operation: RegistryReleaseModerationOperation): RegistryReleaseModerationResponse {
+  const response: RegistryReleaseModerationResponse = {
+    apiVersion: REGISTRY_API_VERSION,
+    coordinate: { namespace: row.namespace, name: row.name, version: row.version },
+    operation,
+    status: row.status,
+    changedAt: dateValue(row.changed_at),
+    auditEventId: row.audit_event_id,
+  };
+  const validation = validateRegistryReleaseModerationResponse(response);
+  if (!validation.valid) throw new RegistryModerationError("REGISTRY_RELEASE_MODERATION_INVALID", validation.issues[0]?.message ?? "Stored release moderation metadata is invalid.");
+  return validation.value;
+}
+
+function denylistMutationResponseFromRow(row: RegistryDenylistMutationRow, action: RegistryDigestDenylistAction): RegistryDigestDenylistMutationResponse {
+  const response: RegistryDigestDenylistMutationResponse = {
+    apiVersion: REGISTRY_API_VERSION,
+    action,
+    digest: row.digest as `sha256:${string}`,
+    active: row.active,
+    changedAt: dateValue(row.changed_at),
+    auditEventId: row.audit_event_id,
+  };
+  const validation = validateRegistryDigestDenylistMutationResponse(response);
+  if (!validation.valid) throw new RegistryModerationError("REGISTRY_DIGEST_DENYLIST_INVALID", validation.issues[0]?.message ?? "Stored denylist metadata is invalid.");
+  return validation.value;
+}
+
+function denylistResultActive(metadata: unknown, fallback: boolean): boolean {
+  let value: unknown = metadata;
+  if (typeof value === "string") {
+    try { value = JSON.parse(value); } catch { value = null; }
+  }
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    const active = (value as Record<string, unknown>).active;
+    if (typeof active === "boolean") return active;
+  }
+  return fallback;
+}
+
+function reportFromRow(row: RegistryReportRow): RegistryReport {
+  const report: RegistryReport = {
+    apiVersion: REGISTRY_API_VERSION,
+    reportId: row.report_id,
+    target: {
+      package: { namespace: row.namespace, name: row.name },
+      ...(row.release_version === null ? {} : { releaseVersion: row.release_version }),
+    },
+    category: row.category,
+    status: row.status,
+    evidence: row.evidence,
+    createdAt: dateValue(row.created_at),
+    updatedAt: dateValue(row.updated_at),
+  };
+  const validation = validateRegistryReport(report);
+  if (!validation.valid) throw new RegistryModerationError("REGISTRY_REPORT_INVALID", validation.issues[0]?.message ?? "Stored report metadata is invalid.");
+  return validation.value;
+}
+
+function auditEventFromRow(row: RegistryModerationAuditEventRow): RegistryModerationAuditEvent {
+  const actor = row.actor_kind === "system"
+    ? { kind: "system" as const }
+    : row.actor_provider === null || row.actor_subject === null
+      ? (() => { throw new RegistryModerationError("REGISTRY_AUDIT_EVENT_INVALID", "Stored audit actor identity is incomplete."); })()
+      : { kind: row.actor_kind, identity: { provider: row.actor_provider as "github", subject: row.actor_subject } };
+  const target = moderationTargetFromRow(row);
+  let metadata: unknown = row.metadata_json;
+  if (typeof metadata === "string") {
+    try { metadata = JSON.parse(metadata); } catch { metadata = null; }
+  }
+  const event: RegistryModerationAuditEvent = {
+    eventId: row.event_id,
+    action: row.action,
+    actor,
+    target,
+    occurredAt: dateValue(row.occurred_at),
+    requestId: row.request_id,
+    metadata: metadata as Readonly<Record<string, string>>,
+  };
+  const validation = validateRegistryModerationAuditEventListResponse({ apiVersion: REGISTRY_API_VERSION, items: [event] });
+  if (!validation.valid) throw new RegistryModerationError("REGISTRY_AUDIT_EVENT_INVALID", validation.issues[0]?.message ?? "Stored audit event is invalid.");
+  return validation.value.items[0]!;
+}
+
+function moderationTargetFromRow(row: RegistryModerationAuditEventRow): RegistryModerationAuditTarget {
+  if (row.target_type === "report" && row.target_report_id !== null) return { type: "report", reportId: row.target_report_id };
+  if (row.target_type === "package" && row.target_namespace !== null && row.target_name !== null) {
+    return { type: "package", package: { namespace: row.target_namespace, name: row.target_name } };
+  }
+  if (row.target_type === "release" && row.target_namespace !== null && row.target_name !== null && row.target_version !== null) {
+    return { type: "release", release: { namespace: row.target_namespace, name: row.target_name, version: row.target_version } };
+  }
+  if (row.target_type === "artifact" && row.target_digest !== null) return { type: "artifact", digest: row.target_digest as `sha256:${string}` };
+  throw new RegistryModerationError("REGISTRY_AUDIT_EVENT_INVALID", "Stored audit target is incomplete.");
+}
+
+function publisherWorkspaceFromRows(rows: readonly RegistryPublisherWorkspaceRow[], now: number): RegistryPublisherWorkspaceResponse {
+  const namespaces = new Map<string, Map<string, RegistryPublisherPackageHistory & { releases: RegistryPublisherReleaseSummary[] }>>();
+  for (const row of rows) {
+    let packages = namespaces.get(row.namespace);
+    if (!packages) {
+      packages = new Map();
+      namespaces.set(row.namespace, packages);
+    }
+    if (row.release_id === null) continue;
+    if (
+      row.name === null || row.version === null || row.reservation_created_at === null || row.expires_at === null
+    ) {
+      throw new RegistryRepositoryError("REGISTRY_ROW_INVALID", "Publisher release history is incomplete.");
+    }
+
+    const release: RegistryPublisherReleaseSummary = {
+      releaseId: row.release_id,
+      version: row.version,
+      status: publisherReleaseStatus(row, now),
+      createdAt: dateValue(row.reservation_created_at),
+      expiresAt: dateValue(row.expires_at),
+      ...(row.digest === null ? {} : { digest: row.digest as `sha256:${string}` }),
+      ...(row.completed_at === null ? {} : { completedAt: dateValue(row.completed_at) }),
+      ...(row.published_at === null ? {} : { publishedAt: dateValue(row.published_at) }),
+    };
+    const existing = packages.get(row.name);
+    if (existing) {
+      existing.releases.push(release);
+      if (isPublishedPublisherStatus(release.status) && (!existing.latestVersion || compareVersions(release.version, existing.latestVersion) > 0)) {
+        existing.latestVersion = release.version;
+      }
+      continue;
+    }
+    packages.set(row.name, {
+      package: { namespace: row.namespace, name: row.name },
+      ...(isPublishedPublisherStatus(release.status) ? { latestVersion: release.version } : {}),
+      releases: [release],
+    });
+  }
+
+  return {
+    apiVersion: REGISTRY_API_VERSION,
+    namespaces: [...namespaces.entries()].map(([namespace, packages]) => ({
+      namespace,
+      packages: [...packages.values()],
+    })),
+  };
+}
+
+function publisherReleaseStatus(row: RegistryPublisherWorkspaceRow, now: number): RegistryPublisherReleaseStatus {
+  if (row.public_status !== null) return row.public_status;
+  if (row.upload_status === "reserved") return "uploading";
+  if (row.upload_status !== null) return row.upload_status;
+  if (row.expires_at === null) throw new RegistryRepositoryError("REGISTRY_ROW_INVALID", "Publisher release expiry is missing.");
+  return new Date(row.expires_at).getTime() <= now ? "expired" : "reserved";
+}
+
+function isPublishedPublisherStatus(status: RegistryPublisherReleaseStatus): boolean {
+  return status === "active" || status === "deprecated";
+}
+
 function reservationFromRow(row: RegistryReleaseReservationRow): RegistryReleaseReservation {
   return {
     apiVersion: REGISTRY_API_VERSION,
@@ -1226,6 +2286,14 @@ function artifactObjectKey(digest: string): string {
 
 function dateValue(value: string | Date): string {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+function queueCount(value: number | string): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new RegistryRepositoryError("REGISTRY_ROW_INVALID", "The scan queue returned an invalid counter.");
+  }
+  return parsed;
 }
 
 function equalJson(left: unknown, right: unknown): boolean {

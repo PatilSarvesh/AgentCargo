@@ -1,0 +1,158 @@
+{
+  "schemaVersion": 1,
+  "project": "AgentCargo",
+  "lastReviewed": "2026-08-21",
+  "purpose": "Machine-readable gates for the controlled public-beta launch handoff.",
+  "statusSemantics": {
+    "ready": "The repository contains the implementation and verification evidence for this gate.",
+    "operator-action": "The repository documents the gate, but a deployment operator must configure or exercise it.",
+    "external-action": "The repository cannot complete the gate without external creators, users, or feedback."
+  },
+  "gates": [
+    {
+      "id": "starter-catalog",
+      "category": "repository",
+      "title": "Maintained starter catalog",
+      "status": "ready",
+      "requiredPaths": [
+        "examples/starter-skills/catalog.json",
+        "examples/starter-skills/README.md",
+        "packages/core/src/starter-skills.test.ts"
+      ],
+      "statusEvidence": "Starter fixture verification PASS"
+    },
+    {
+      "id": "signed-cli-release",
+      "category": "repository",
+      "title": "Deterministic signed CLI release bundle",
+      "status": "ready",
+      "requiredPaths": [
+        ".github/workflows/cli-release.yml",
+        "scripts/release-cli.mjs",
+        "packages/cli/src/release-artifacts.ts",
+        "docs/RELEASE.md",
+        "docs/adr/0007-signed-cli-release-bundle.md"
+      ],
+      "requiredPackageScripts": ["release:cli"],
+      "statusEvidence": "CLI release-bundle tests PASS"
+    },
+    {
+      "id": "operational-status",
+      "category": "repository",
+      "title": "Public operational status and dashboard boundary",
+      "status": "ready",
+      "requiredPaths": [
+        "packages/registry-contract/openapi/registry-v1.json",
+        "packages/registry-api/src/index.ts",
+        "packages/registry-worker/src/scheduler.ts",
+        "packages/cli/src/index.ts",
+        "packages/cli/src/index.test.ts",
+        "apps/web/app/status/page.tsx",
+        "docs/OPERATIONS.md"
+      ],
+      "statusEvidence": "CLI status tests PASS"
+    },
+    {
+      "id": "public-beta-policies",
+      "category": "repository",
+      "title": "User-facing public-beta policies",
+      "status": "ready",
+      "requiredPaths": [
+        "docs/PRIVACY.md",
+        "docs/CONTENT_POLICY.md",
+        "docs/PLATFORM_SUPPORT.md",
+        "docs/RETENTION.md"
+      ],
+      "statusEvidence": "Policy documentation checks PASS"
+    },
+    {
+      "id": "beta-feedback-templates",
+      "category": "repository",
+      "title": "Privacy-conscious beta feedback and metrics templates",
+      "status": "ready",
+      "requiredPaths": [
+        "docs/BETA_FEEDBACK.md",
+        "docs/BETA_METRICS.json"
+      ],
+      "statusEvidence": "Beta feedback/metrics templates PASS"
+    },
+    {
+      "id": "workspace-verification",
+      "category": "repository",
+      "title": "Workspace verification evidence",
+      "status": "ready",
+      "requiredPaths": ["package.json"],
+      "requiredPackageScripts": ["verify", "check:beta"],
+      "statusEvidence": "Full workspace verification PASS"
+    },
+    {
+      "id": "deployment-services",
+      "category": "deployment",
+      "title": "Hosted registry dependencies and live integration",
+      "status": "operator-action",
+      "requiredActions": [
+        "Provision PostgreSQL, apply the checked-in migrations, and enable point-in-time recovery.",
+        "Provision private S3-compatible artifact storage with immutable/digest-addressed objects.",
+        "Configure the server-only GitHub provider broker and registry session settings.",
+        "Run the opt-in PostgreSQL/object-store integration harness in the target environment."
+      ]
+    },
+    {
+      "id": "status-alerts",
+      "category": "deployment",
+      "title": "Operational probes and alert routing",
+      "status": "operator-action",
+      "requiredActions": [
+        "Inject bounded database, storage, worker, and moderation probes into GET /v1/status.",
+        "Expose worker readiness and queue lag through the hosting platform health path.",
+        "Route outage, stale-lease, queue-lag, and repeated-failure alerts to an on-call channel.",
+        "Exercise the incident runbook once with a staging failure and preserve evidence."
+      ]
+    },
+    {
+      "id": "release-key-custody",
+      "category": "deployment",
+      "title": "CLI release key custody and distribution",
+      "status": "operator-action",
+      "requiredActions": [
+        "Store AGENTCARGO_CLI_RELEASE_PRIVATE_KEY in a protected CI secret or approved key service.",
+        "Restrict tag/manual release permissions and rotate or revoke keys through an operator procedure.",
+        "Publish the matching public key and fingerprint through a trusted release channel.",
+        "Verify a signed bundle from the release channel before public distribution."
+      ]
+    },
+    {
+      "id": "hosted-policy-identity",
+      "category": "deployment",
+      "title": "Hosted policy and data-governance setup",
+      "status": "operator-action",
+      "requiredActions": [
+        "Fill the hosted legal entity, jurisdiction, privacy contact, and support channel.",
+        "List subprocessors and configure published cookie, deletion, backup, log, and evidence-retention periods.",
+        "Review the policy documents with qualified counsel before inviting external users."
+      ]
+    },
+    {
+      "id": "external-creators",
+      "category": "external",
+      "title": "External creator onboarding",
+      "status": "external-action",
+      "requiredActions": [
+        "Invite at least 10 external creators and record whether each publishes without maintainer intervention.",
+        "Collect structured feedback on validation, scanner findings, publication, and recovery paths."
+      ]
+    },
+    {
+      "id": "external-install-learning",
+      "category": "external",
+      "title": "External installation and beta learning targets",
+      "status": "external-action",
+      "requiredActions": [
+        "Reach 100 successful installs outside the core project team.",
+        "Measure at least 95 percent installation success across the supported host/scope/OS matrix.",
+        "Record search-to-detail, detail-to-install, checksum, failure, and time-to-first-success observations.",
+        "Invite at least one independently maintained adapter or validation rule."
+      ]
+    }
+  ]
+}

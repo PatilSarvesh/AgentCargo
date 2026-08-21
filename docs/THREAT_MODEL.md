@@ -250,7 +250,7 @@ Direct GitHub repository access is not part of MVP identity and therefore is out
 
 ### 6.9 AgentCargo supply chain
 
-Required controls include pinned lockfile-based installs, deny-by-default dependency build scripts, dependency review, repository secret scanning, protected release workflows, signed release artifacts, provenance, and multi-factor authentication for maintainers. The current workspace permits only explicitly reviewed dependency build scripts, but public release signing and provenance are pending.
+Required controls include pinned lockfile-based installs, deny-by-default dependency build scripts, dependency review, repository secret scanning, protected release workflows, signed release artifacts, provenance, and multi-factor authentication for maintainers. The repository now produces a deterministic USTAR CLI bundle with an Ed25519-signed canonical manifest and a protected-key workflow; external package publication, public-key distribution, hardware-backed custody, and independent provenance attestations remain deployment work.
 
 ## 7. Diagnostics and recovery
 

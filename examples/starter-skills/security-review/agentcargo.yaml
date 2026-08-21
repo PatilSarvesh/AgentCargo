@@ -1,0 +1,24 @@
+schema_version: 1
+name: security-review
+version: 0.1.0
+description: Inspect a change for trust boundaries, abuse cases, and actionable security findings.
+license: Apache-2.0
+compatibility:
+  codex:
+    scopes:
+      - project
+      - user
+  claude-code:
+    scopes:
+      - project
+      - user
+capabilities:
+  filesystem:
+    read: true
+    write: false
+  shell: false
+  network: false
+  environment: []
+tags:
+  - security
+  - review

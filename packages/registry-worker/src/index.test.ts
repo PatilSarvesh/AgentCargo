@@ -15,7 +15,7 @@ import type {
   RegistryScanJobRepository,
   RegistryScanRelease,
 } from "@agentcargo/registry-db";
-import { RegistryReleaseWorker, type RegistryArtifactFetcher } from "./index.js";
+import { RegistryReleaseWorker, RegistryReleaseWorkerScheduler, type RegistryArtifactFetcher } from "./index.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -31,6 +31,7 @@ describe("RegistryReleaseWorker", () => {
     const artifacts: RegistryArtifactFetcher = { download: async () => fixture.body };
     const worker = new RegistryReleaseWorker(jobs, releases, artifacts, {
       now: () => new Date("2026-08-15T00:00:00.000Z"),
+      denylist: { isDigestDenylisted: async () => false },
     });
 
     await expect(worker.runOnce()).resolves.toMatchObject({ claimed: true, outcome: "activated", releaseId: "release-1" });
@@ -47,6 +48,7 @@ describe("RegistryReleaseWorker", () => {
     const artifacts: RegistryArtifactFetcher = { download: async () => new TextEncoder().encode("tampered") };
     const worker = new RegistryReleaseWorker(jobs, releases, artifacts, {
       now: () => new Date("2026-08-15T00:00:00.000Z"),
+      denylist: { isDigestDenylisted: async () => false },
     });
 
     await expect(worker.runOnce()).resolves.toMatchObject({ claimed: true, outcome: "rejected" });
@@ -54,6 +56,85 @@ describe("RegistryReleaseWorker", () => {
     expect(releases.rejected).toHaveLength(1);
     expect(releases.rejected[0]!.scan.findings[0]!.ruleId).toBe("AGENTCARGO-WORKER-REJECTED");
     expect(jobs.succeeded).toHaveLength(1);
+  });
+
+  it("rejects a digest that is emergency-denylisted before downloading or activating", async () => {
+    const fixture = await createFixture();
+    const jobs = new FakeJobs();
+    const releases = new FakeReleases(fixture.input);
+    let downloaded = false;
+    const worker = new RegistryReleaseWorker(jobs, releases, {
+      download: async () => {
+        downloaded = true;
+        return fixture.body;
+      },
+    }, {
+      now: () => new Date("2026-08-15T00:00:00.000Z"),
+      denylist: { isDigestDenylisted: async () => true },
+    });
+
+    await expect(worker.runOnce()).resolves.toMatchObject({ claimed: true, outcome: "rejected" });
+    expect(downloaded).toBe(false);
+    expect(releases.activated).toHaveLength(0);
+    expect(releases.rejected[0]!.reason).toBe("DIGEST_DENYLISTED");
+  });
+
+  it("keeps denylist enforcement on the scheduled worker path", async () => {
+    const fixture = await createFixture();
+    const jobs = new FakeJobs();
+    const releases = new FakeReleases(fixture.input);
+    let downloaded = false;
+    const worker = new RegistryReleaseWorker(jobs, releases, {
+      download: async () => {
+        downloaded = true;
+        return fixture.body;
+      },
+    }, {
+      now: () => new Date("2026-08-15T00:00:00.000Z"),
+      denylist: { isDigestDenylisted: async () => true },
+    });
+    const scheduler = new RegistryReleaseWorkerScheduler(worker, { now: () => new Date("2026-08-15T00:00:00.000Z") });
+
+    await expect(scheduler.runNow()).resolves.toMatchObject({ claimed: true, outcome: "rejected" });
+    expect(downloaded).toBe(false);
+    expect(releases.rejected[0]!.reason).toBe("DIGEST_DENYLISTED");
+    expect(scheduler.health(new Date("2026-08-15T00:00:00.000Z"))).toMatchObject({ totalRuns: 1, claimedJobs: 1, lastOutcome: "rejected" });
+    await scheduler.stop();
+  });
+
+  it("requires a denylist reader before a worker can be constructed", async () => {
+    const fixture = await createFixture();
+    expect(() => new RegistryReleaseWorker(
+      new FakeJobs(),
+      new FakeReleases(fixture.input),
+      { download: async () => fixture.body },
+      {} as never,
+    )).toThrow("A digest denylist reader is required");
+  });
+
+  it("fails closed when the denylist reader is unavailable", async () => {
+    const fixture = await createFixture();
+    const jobs = new FakeJobs();
+    const releases = new FakeReleases(fixture.input);
+    let downloaded = false;
+    const worker = new RegistryReleaseWorker(jobs, releases, {
+      download: async () => {
+        downloaded = true;
+        return fixture.body;
+      },
+    }, {
+      now: () => new Date("2026-08-15T00:00:00.000Z"),
+      denylist: {
+        isDigestDenylisted: async () => {
+          throw new Error("denylist unavailable");
+        },
+      },
+    });
+
+    await expect(worker.runOnce()).resolves.toMatchObject({ claimed: true, outcome: "failed" });
+    expect(downloaded).toBe(false);
+    expect(releases.activated).toHaveLength(0);
+    expect(jobs.failed[0]!.message).toBe("denylist unavailable");
   });
 });
 

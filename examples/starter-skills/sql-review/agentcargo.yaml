@@ -1,0 +1,25 @@
+schema_version: 1
+name: sql-review
+version: 0.1.0
+description: Review SQL and database changes for correctness, migration safety, query behavior, and data integrity.
+license: Apache-2.0
+compatibility:
+  codex:
+    scopes:
+      - project
+      - user
+  claude-code:
+    scopes:
+      - project
+      - user
+capabilities:
+  filesystem:
+    read: true
+    write: false
+  shell: false
+  network: false
+  environment: []
+tags:
+  - database
+  - sql
+  - migration

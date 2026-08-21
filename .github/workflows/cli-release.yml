@@ -1,0 +1,69 @@
+name: CLI release bundle
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "cli-v*"
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.16.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Require the protected signing key
+        env:
+          AGENTCARGO_CLI_RELEASE_PRIVATE_KEY: ${{ secrets.AGENTCARGO_CLI_RELEASE_PRIVATE_KEY }}
+        run: test -n "$AGENTCARGO_CLI_RELEASE_PRIVATE_KEY"
+      - name: Materialize an ephemeral signing key
+        id: signing-key
+        env:
+          AGENTCARGO_CLI_RELEASE_PRIVATE_KEY: ${{ secrets.AGENTCARGO_CLI_RELEASE_PRIVATE_KEY }}
+        run: |
+          key_path="$(mktemp)"
+          printf '%s' "$AGENTCARGO_CLI_RELEASE_PRIVATE_KEY" > "$key_path"
+          chmod 600 "$key_path"
+          echo "path=$key_path" >> "$GITHUB_OUTPUT"
+      - name: Build and sign the deterministic bundle
+        run: >-
+          pnpm release:cli --
+          --private-key "${{ steps.signing-key.outputs.path }}"
+          --out-dir "$RUNNER_TEMP/agentcargo-cli-release"
+          --source-commit "$GITHUB_SHA"
+      - name: Export the matching public key
+        run: >-
+          openssl pkey
+          -in "${{ steps.signing-key.outputs.path }}"
+          -pubout
+          -out "$RUNNER_TEMP/agentcargo-cli-release/agentcargo-cli-release-public.pem"
+      - name: Verify the generated release
+        run: |
+          manifest=$(find "$RUNNER_TEMP/agentcargo-cli-release" -name '*.manifest.json' -print -quit)
+          signature="$manifest.sig.json"
+          archive=$(find "$RUNNER_TEMP/agentcargo-cli-release" -name '*.tar' -print -quit)
+          node scripts/release-cli.mjs verify \
+            --archive "$archive" \
+            --manifest "$manifest" \
+            --signature "$signature" \
+            --public-key "$RUNNER_TEMP/agentcargo-cli-release/agentcargo-cli-release-public.pem"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agentcargo-cli-release
+          path: ${{ runner.temp }}/agentcargo-cli-release
+          if-no-files-found: error
+      - name: Remove the ephemeral signing key
+        if: always()
+        run: rm -f "${{ steps.signing-key.outputs.path }}"

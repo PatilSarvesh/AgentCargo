@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   InMemoryRegistryReleaseRepository,
+  InMemoryRegistryModerationRepository,
   InMemoryRegistryReleaseReservationRepository,
   PostgresRegistryNamespaceRepository,
+  PostgresRegistryPublisherWorkspaceRepository,
   PostgresRegistryReleaseReservationRepository,
   PostgresRegistryReleaseScanRepository,
   PostgresRegistryScanJobRepository,
   PostgresRegistryReleaseUploadRepository,
   PostgresRegistryReleaseRepository,
+  PostgresRegistryModerationRepository,
   PostgresRegistryOAuthStateStore,
   PostgresRegistrySessionStore,
   type RegistrySqlClient,
@@ -31,6 +34,28 @@ describe("registry release repositories", () => {
 
     expect(result).toEqual(release);
     expect(result).not.toBe(release);
+  });
+
+  it("overlays mutable public status while filtering quarantined releases", async () => {
+    const queries: string[] = [];
+    const client: RegistrySqlClient = {
+      async query<Row>(text: string) {
+        queries.push(text);
+        return { rows: [{ release_json: release, artifact_key: "sha256/a", status: "deprecated" }] as Row[] };
+      },
+    };
+    const repository = new PostgresRegistryReleaseRepository(client, async () => ({
+      url: "https://storage.example.test/sha256/a",
+      expiresAt: "2026-08-13T00:05:00.000Z",
+    }));
+    const deprecated = await repository.getRelease({ namespace: "acme", name: "review", version: "1.2.3" });
+    expect(deprecated?.status).toBe("deprecated");
+    expect(queries[0]).toContain("status IN ('active', 'deprecated')");
+
+    const hiddenRepository = new PostgresRegistryReleaseRepository({
+      async query<Row>() { return { rows: [] as Row[] }; },
+    }, async () => ({ url: "https://storage.example.test/hidden", expiresAt: "2026-08-13T00:05:00.000Z" }));
+    await expect(hiddenRepository.getRelease({ namespace: "acme", name: "review", version: "9.9.9" })).resolves.toBeNull();
   });
 
   it("uses parameterized SQL and supplies a request-scoped artifact URL", async () => {
@@ -161,6 +186,72 @@ describe("registry release repositories", () => {
     expect(queries.some((text) => text.includes("ON CONFLICT (provider, subject) DO UPDATE"))).toBe(true);
   });
 
+  it("loads only the authenticated publisher's namespaces and immutable version history", async () => {
+    const queries: Array<{ text: string; values: readonly unknown[] }> = [];
+    const digest = `sha256:${"a".repeat(64)}`;
+    const client: RegistrySqlClient = {
+      async query<Row>(text: string, values: readonly unknown[]) {
+        queries.push({ text, values });
+        return { rows: [{
+          namespace: "acme",
+          release_id: "release-2",
+          name: "review",
+          version: "1.1.0",
+          reservation_created_at: "2026-08-15T01:00:00.000Z",
+          expires_at: "2026-08-15T01:30:00.000Z",
+          upload_status: "scanning",
+          digest,
+          completed_at: "2026-08-15T01:02:00.000Z",
+          public_status: null,
+          published_at: null,
+        }, {
+          namespace: "acme",
+          release_id: "release-1",
+          name: "review",
+          version: "1.0.0",
+          reservation_created_at: "2026-08-15T00:00:00.000Z",
+          expires_at: "2026-08-15T00:30:00.000Z",
+          upload_status: "scanning",
+          digest,
+          completed_at: "2026-08-15T00:01:00.000Z",
+          public_status: "active",
+          published_at: "2026-08-15T00:02:00.000Z",
+        }, {
+          namespace: "empty-space",
+          release_id: null,
+          name: null,
+          version: null,
+          reservation_created_at: null,
+          expires_at: null,
+          upload_status: null,
+          digest: null,
+          completed_at: null,
+          public_status: null,
+          published_at: null,
+        }] as Row[] };
+      },
+    };
+    const repository = new PostgresRegistryPublisherWorkspaceRepository(client, {
+      now: () => Date.parse("2026-08-15T01:05:00.000Z"),
+    });
+
+    const workspace = await repository.getWorkspace({ provider: "github", subject: "publisher-1", login: "acme" });
+
+    expect(queries).toHaveLength(1);
+    expect(queries[0]!.text).toContain("WHERE namespaces.owner_provider = $1 AND namespaces.owner_subject = $2");
+    expect(queries[0]!.values).toEqual(["github", "publisher-1"]);
+    expect(workspace.namespaces).toHaveLength(2);
+    expect(workspace.namespaces[0]).toMatchObject({
+      namespace: "acme",
+      packages: [{
+        package: { namespace: "acme", name: "review" },
+        latestVersion: "1.0.0",
+        releases: [{ version: "1.1.0", status: "scanning" }, { version: "1.0.0", status: "active" }],
+      }],
+    });
+    expect(workspace.namespaces[1]).toEqual({ namespace: "empty-space", packages: [] });
+  });
+
   it("persists only hashed opaque sessions and resolves or revokes them durably", async () => {
     const queries: Array<{ text: string; values: readonly unknown[] }> = [];
     let revoked = false;
@@ -169,7 +260,13 @@ describe("registry release repositories", () => {
         queries.push({ text, values });
         if (text.includes("SELECT sessions.provider")) {
           return {
-            rows: (revoked ? [] : [{ provider: "github", subject: "publisher-1", login: "acme" }]) as Row[],
+            rows: (revoked ? [] : [{
+              provider: "github",
+              subject: "publisher-1",
+              login: "acme",
+              scopes: ["publisher:read", "publisher:write"],
+              expires_at: "2026-08-15T00:02:00.000Z",
+            }]) as Row[],
           };
         }
         if (text.includes("UPDATE registry_auth_sessions")) {
@@ -193,6 +290,10 @@ describe("registry release repositories", () => {
     expect(queries.find(({ text }) => text.includes("INSERT INTO registry_auth_sessions"))?.values).toContainEqual(["publisher:read", "publisher:write"]);
     expect(await store.resolve(session.accessToken)).toEqual({ provider: "github", subject: "publisher-1", login: "acme" });
     expect(await store.resolveContext(session.accessToken)).toMatchObject({ scopes: ["publisher:read", "publisher:write"] });
+    expect(await store.inspect(session.accessToken)).toEqual({
+      expiresAt: "2026-08-15T00:02:00.000Z",
+      scopes: ["publisher:read", "publisher:write"],
+    });
     expect(await store.revoke(session.accessToken)).toBe(true);
     expect(await store.revoke(session.accessToken)).toBe(false);
     now += 120_000;
@@ -426,9 +527,29 @@ describe("registry release repositories", () => {
     expect(await jobs.enqueuePending(new Date("2026-08-15T00:00:00.000Z"))).toBe(1);
     await expect(jobs.claim(new Date("2026-08-15T00:00:00.000Z"))).resolves.toMatchObject({ jobId: "job-scan-1", releaseId: "release-scan-1" });
     await jobs.succeed("job-scan-1", completion.scan);
-    const release = await new PostgresRegistryReleaseScanRepository(client).getForScan("release-scan-1");
+    const release = await new PostgresRegistryReleaseScanRepository(client, { isDigestDenylisted: async () => false }).getForScan("release-scan-1");
     expect(release).toMatchObject({ releaseId: "release-scan-1", coordinate: { namespace: "acme", name: "scan", version: "1.0.0" }, completion });
     expect(queries.some(({ text }) => text.includes("FOR UPDATE SKIP LOCKED"))).toBe(true);
+  });
+
+  it("reports bounded queue counters and stale lease lag without package data", async () => {
+    const queries: Array<{ text: string; values: readonly unknown[] }> = [];
+    const client: RegistrySqlClient = {
+      async query<Row>(text: string, values: readonly unknown[]) {
+        queries.push({ text, values });
+        if (text.includes("COUNT(*) FILTER")) {
+          return {
+            rows: [{ queued: "2", failed: "1", running: "3", stale_leases: "1", oldest_available_at: "2026-08-15T00:00:00.000Z" }] as Row[],
+          };
+        }
+        return { rows: [] as Row[] };
+      },
+    };
+    const now = new Date("2026-08-15T00:05:00.000Z");
+    const stats = await new PostgresRegistryScanJobRepository(client).getQueueStats(now);
+    expect(stats).toEqual({ queued: 2, failed: 1, running: 3, staleLeases: 1, oldestAvailableAt: "2026-08-15T00:00:00.000Z" });
+    expect(queries[0]!.values).toEqual([now.toISOString()]);
+    expect(queries[0]!.text).not.toContain("completion_json");
   });
 
   it("activates a validated release only for its matching scanning reservation", async () => {
@@ -443,9 +564,300 @@ describe("registry release repositories", () => {
         return { rows: [] as Row[] };
       },
     };
-    await expect(new PostgresRegistryReleaseScanRepository(client).activate("release-activate-1", release)).resolves.toBeUndefined();
+    await expect(new PostgresRegistryReleaseScanRepository(client, { isDigestDenylisted: async () => false }).activate("release-activate-1", release)).resolves.toBeUndefined();
     expect(queries.some((text) => text.includes("INSERT INTO registry_public_releases"))).toBe(true);
     expect(queries.some((text) => text.includes("INSERT INTO registry_public_packages"))).toBe(true);
+  });
+
+  it("keeps in-memory reports idempotent and paginates append-only audit events", async () => {
+    const repository = new InMemoryRegistryModerationRepository();
+    const input = {
+      actor: { provider: "github" as const, subject: "reporter-1" },
+      request: {
+        target: { package: { namespace: "acme", name: "review" }, releaseVersion: "1.2.3" },
+        category: "malware" as const,
+        evidence: "Suspicious script behavior.",
+        idempotencyKey: "report-1",
+      },
+      requestId: "request-1",
+      now: new Date("2026-08-15T00:00:00.000Z"),
+    };
+
+    const first = await repository.createReport(input);
+    const replay = await repository.createReport(input);
+
+    expect(first.replayed).toBe(false);
+    expect(replay).toMatchObject({ replayed: true, report: { reportId: first.report.reportId } });
+    await expect(repository.createReport({
+      ...input,
+      request: { ...input.request, evidence: "Different evidence." },
+    })).rejects.toMatchObject({ code: "REGISTRY_REPORT_IDEMPOTENCY_CONFLICT" });
+
+    const audit = await repository.listAuditEvents({ limit: 1 });
+    expect(audit.items).toHaveLength(1);
+    expect(audit.items[0]).toMatchObject({
+      action: "report_created",
+      actor: { kind: "publisher", identity: input.actor },
+      target: { type: "report", reportId: first.report.reportId },
+    });
+    expect(audit.nextCursor).toBeUndefined();
+  });
+
+  it("persists reports with PostgreSQL idempotency and maps audit rows safely", async () => {
+    const queries: Array<{ text: string; values: readonly unknown[] }> = [];
+    const reportRow = {
+      report_id: "report-1",
+      namespace: "acme",
+      name: "review",
+      release_version: "1.2.3",
+      category: "malware" as const,
+      status: "open" as const,
+      evidence: "Suspicious script behavior.",
+      created_at: "2026-08-15T00:00:00.000Z",
+      updated_at: "2026-08-15T00:00:00.000Z",
+    };
+    let insertAttempt = 0;
+    const client: RegistrySqlClient = {
+      async query<Row>(text: string, values: readonly unknown[]) {
+        queries.push({ text, values });
+        if (text.includes("WITH inserted AS")) {
+          insertAttempt += 1;
+          return { rows: (insertAttempt === 1 ? [reportRow] : []) as Row[] };
+        }
+        if (text.includes("FROM registry_reports")) {
+          return { rows: [{ ...reportRow, reporter_provider: "github", reporter_subject: "reporter-1", idempotency_key: "report-1" }] as Row[] };
+        }
+        if (text.includes("FROM registry_moderation_audit_events")) {
+          return {
+            rows: [{
+              event_id: "event-1",
+              action: "report_created" as const,
+              actor_kind: "publisher" as const,
+              actor_provider: "github",
+              actor_subject: "reporter-1",
+              target_type: "report" as const,
+              target_report_id: "report-1",
+              target_namespace: null,
+              target_name: null,
+              target_version: null,
+              target_digest: null,
+              occurred_at: "2026-08-15T00:00:00.000Z",
+              request_id: "request-1",
+              metadata_json: { category: "malware", targetType: "release" },
+            }] as Row[],
+          };
+        }
+        return { rows: [] as Row[] };
+      },
+    };
+    const repository = new PostgresRegistryModerationRepository(client);
+    const input = {
+      actor: { provider: "github" as const, subject: "reporter-1" },
+      request: {
+        target: { package: { namespace: "acme", name: "review" }, releaseVersion: "1.2.3" },
+        category: "malware" as const,
+        evidence: "Suspicious script behavior.",
+        idempotencyKey: "report-1",
+      },
+      requestId: "request-1",
+      now: new Date("2026-08-15T00:00:00.000Z"),
+    };
+
+    const first = await repository.createReport(input);
+    const replay = await repository.createReport(input);
+    const audit = await repository.listAuditEvents({ limit: 10 });
+
+    expect(first).toMatchObject({ replayed: false, report: { reportId: "report-1", status: "open" } });
+    expect(replay).toMatchObject({ replayed: true, report: { reportId: "report-1" } });
+    expect(audit.items[0]).toMatchObject({
+      eventId: "event-1",
+      action: "report_created",
+      target: { type: "report", reportId: "report-1" },
+      metadata: { category: "malware", targetType: "release" },
+    });
+    const insertQuery = queries.find(({ text }) => text.includes("WITH inserted AS"));
+    expect(insertQuery?.text).toContain("ON CONFLICT (reporter_provider, reporter_subject, idempotency_key) DO NOTHING");
+    expect(insertQuery?.text).toContain("registry_moderation_audit_events");
+    expect(insertQuery?.values).toContain("Suspicious script behavior.");
+    expect(queries.some(({ text, values }) => text.includes("ORDER BY occurred_at DESC") && values[0] === 11)).toBe(true);
+  });
+
+  it("guards in-memory deprecation, quarantine, and restoration transitions", async () => {
+    const coordinate = { namespace: "acme", name: "review", version: "1.2.3" } as const;
+    const repository = new InMemoryRegistryModerationRepository({
+      releases: [{ coordinate, status: "active" }],
+      releaseOwners: { acme: "github:publisher-1" },
+    });
+    const base = {
+      actor: { provider: "github" as const, subject: "publisher-1" },
+      actorKind: "publisher" as const,
+      coordinate,
+      requestId: "moderation-request-1",
+      request: { reason: "The publisher superseded this release.", idempotencyKey: "moderate-1" },
+      now: new Date("2026-08-15T00:00:00.000Z"),
+    };
+
+    const deprecated = await repository.moderateRelease({ ...base, operation: "deprecate" });
+    const replay = await repository.moderateRelease({ ...base, operation: "deprecate" });
+    expect(deprecated).toMatchObject({ replayed: false, response: { operation: "deprecate", status: "deprecated" } });
+    expect(replay).toMatchObject({ replayed: true, response: { auditEventId: deprecated.response.auditEventId } });
+    await expect(repository.moderateRelease({
+      ...base,
+      actor: { provider: "github", subject: "other-publisher" },
+      operation: "quarantine",
+      request: { ...base.request, idempotencyKey: "moderate-2" },
+    })).resolves.toMatchObject({ response: { status: "quarantined" } });
+    await expect(repository.moderateRelease({
+      ...base,
+      actor: { provider: "github", subject: "maintainer-1" },
+      actorKind: "maintainer",
+      operation: "unquarantine",
+      request: { ...base.request, idempotencyKey: "moderate-3" },
+    })).resolves.toMatchObject({ response: { status: "deprecated" } });
+    await expect(repository.moderateRelease({
+      ...base,
+      actor: { provider: "github", subject: "other-publisher" },
+      operation: "deprecate",
+      request: { ...base.request, idempotencyKey: "moderate-4" },
+    })).rejects.toMatchObject({ code: "REGISTRY_RELEASE_MODERATION_FORBIDDEN" });
+
+    const audit = await repository.listAuditEvents({ limit: 10 });
+    expect(audit.items.map((event) => event.action)).toEqual([
+      "release_unquarantined",
+      "release_quarantined",
+      "release_deprecated",
+    ]);
+  });
+
+  it("uses a guarded PostgreSQL transition and replays the immutable moderation event", async () => {
+    const queries: Array<{ text: string; values: readonly unknown[] }> = [];
+    let firstTransition = true;
+    const client: RegistrySqlClient = {
+      async query<Row>(text: string, values: readonly unknown[]) {
+        queries.push({ text, values });
+        if (text.includes("WITH updated AS")) {
+          return {
+            rows: (firstTransition ? [{
+              namespace: "acme",
+              name: "review",
+              version: "1.2.3",
+              status: "deprecated" as const,
+              changed_at: "2026-08-15T00:00:00.000Z",
+              audit_event_id: "event-deprecate-1",
+            }] : []) as Row[],
+          };
+        }
+        if (text.includes("target_type = 'release'")) {
+          return { rows: [{ event_id: "event-deprecate-1", action: "release_deprecated" as const, occurred_at: "2026-08-15T00:00:00.000Z" }] as Row[] };
+        }
+        if (text.includes("quarantine_previous_status")) {
+          return { rows: [{ status: "deprecated" as const, quarantine_previous_status: null }] as Row[] };
+        }
+        if (text.includes("ORDER BY occurred_at DESC")) {
+          return { rows: [{
+            event_id: "event-deprecate-1",
+            action: "release_deprecated" as const,
+            actor_kind: "publisher" as const,
+            actor_provider: "github",
+            actor_subject: "publisher-1",
+            target_type: "release" as const,
+            target_report_id: null,
+            target_namespace: "acme",
+            target_name: "review",
+            target_version: "1.2.3",
+            target_digest: null,
+            occurred_at: "2026-08-15T00:00:00.000Z",
+            request_id: "moderation-request-1",
+            idempotency_key: "moderate-1",
+            metadata_json: { reason: "The publisher superseded this release.", operation: "deprecate" },
+          }] as Row[] };
+        }
+        return { rows: [{ namespace: "acme" }] as Row[] };
+      },
+    };
+    const repository = new PostgresRegistryModerationRepository(client);
+    const input = {
+      actor: { provider: "github" as const, subject: "publisher-1" },
+      actorKind: "publisher" as const,
+      coordinate: { namespace: "acme", name: "review", version: "1.2.3" },
+      operation: "deprecate" as const,
+      request: { reason: "The publisher superseded this release.", idempotencyKey: "moderate-1" },
+      requestId: "moderation-request-1",
+      now: new Date("2026-08-15T00:00:00.000Z"),
+    };
+
+    const first = await repository.moderateRelease(input);
+    firstTransition = false;
+    const replay = await repository.moderateRelease(input);
+    const audit = await repository.listAuditEvents({ limit: 10 });
+
+    expect(first).toMatchObject({ replayed: false, response: { status: "deprecated", auditEventId: "event-deprecate-1" } });
+    expect(replay).toMatchObject({ replayed: true, response: { status: "deprecated", auditEventId: "event-deprecate-1" } });
+    expect(audit.items[0]).toMatchObject({ action: "release_deprecated", target: { type: "release", release: input.coordinate } });
+    const transition = queries.find(({ text }) => text.includes("WITH updated AS"));
+    expect(transition?.text).toContain("EXISTS (\n                SELECT 1 FROM registry_namespaces");
+    expect(transition?.text).toContain("quarantine_previous_status");
+    expect(transition?.text).toContain("ON CONFLICT DO NOTHING");
+    expect(transition?.values.some((value) => String(value).includes("The publisher superseded this release."))).toBe(true);
+  });
+
+  it("adds and removes emergency denylist digests with append-only audit events", async () => {
+    const digest = `sha256:${"d".repeat(64)}` as `sha256:${string}`;
+    const repository = new InMemoryRegistryModerationRepository();
+    const input = {
+      actor: { provider: "github" as const, subject: "maintainer-1" },
+      requestId: "deny-request-1",
+      request: { action: "add" as const, digest, reason: "Emergency block.", idempotencyKey: "deny-1" },
+      now: new Date("2026-08-15T00:00:00.000Z"),
+    };
+    const added = await repository.mutateDenylist(input);
+    const replay = await repository.mutateDenylist(input);
+    expect(added).toMatchObject({ replayed: false, response: { action: "add", active: true, digest } });
+    expect(replay).toMatchObject({ replayed: true, response: { auditEventId: added.response.auditEventId } });
+    await expect(repository.isDigestDenylisted(digest)).resolves.toBe(true);
+    await repository.mutateDenylist({ ...input, request: { ...input.request, action: "remove", idempotencyKey: "deny-2" } });
+    await expect(repository.isDigestDenylisted(digest)).resolves.toBe(false);
+    await expect(repository.listDenylistedDigests()).resolves.toMatchObject({ items: [] });
+    const audit = await repository.listAuditEvents({ limit: 10 });
+    expect(audit.items.map((event) => event.action)).toEqual(["digest_denylist_removed", "digest_denylisted"]);
+  });
+
+  it("persists denylist state and audit replay through PostgreSQL queries", async () => {
+    const digest = `sha256:${"e".repeat(64)}` as `sha256:${string}`;
+    const queries: Array<{ text: string; values: readonly unknown[] }> = [];
+    let firstMutation = true;
+    const client: RegistrySqlClient = {
+      async query<Row>(text: string, values: readonly unknown[]) {
+        queries.push({ text, values });
+        if (text.includes("WITH changed AS")) {
+          return { rows: (firstMutation ? [{ digest, reason: "Emergency block.", added_at: "2026-08-15T00:00:00.000Z", active: true, changed_at: "2026-08-15T00:00:00.000Z", audit_event_id: "event-deny-1" }] : []) as Row[] };
+        }
+        if (text.includes("target_type = 'artifact'")) {
+          return { rows: [{ event_id: "event-deny-1", action: "digest_denylisted" as const, occurred_at: "2026-08-15T00:00:00.000Z", metadata_json: { active: true } }] as Row[] };
+        }
+        if (text.includes("WHERE digest = $1")) return { rows: [{ digest, reason: "Emergency block.", added_at: "2026-08-15T00:00:00.000Z", active: true }] as Row[] };
+        if (text.includes("WHERE active = true")) return { rows: [{ digest, reason: "Emergency block.", added_at: "2026-08-15T00:00:00.000Z" }] as Row[] };
+        return { rows: [] as Row[] };
+      },
+    };
+    const repository = new PostgresRegistryModerationRepository(client);
+    const input = {
+      actor: { provider: "github" as const, subject: "maintainer-1" },
+      requestId: "deny-request-1",
+      request: { action: "add" as const, digest, reason: "Emergency block.", idempotencyKey: "deny-1" },
+      now: new Date("2026-08-15T00:00:00.000Z"),
+    };
+    const added = await repository.mutateDenylist(input);
+    firstMutation = false;
+    const replay = await repository.mutateDenylist(input);
+    const listed = await repository.listDenylistedDigests();
+    expect(added).toMatchObject({ replayed: false, response: { active: true, digest } });
+    expect(replay).toMatchObject({ replayed: true, response: { active: true, digest } });
+    expect(listed.items).toEqual([{ digest, reason: "Emergency block.", addedAt: "2026-08-15T00:00:00.000Z" }]);
+    const mutation = queries.find(({ text }) => text.includes("WITH changed AS"));
+    expect(mutation?.text).toContain("registry_digest_denylist");
+    expect(mutation?.text).toContain("registry_moderation_audit_events");
+    expect(mutation?.text).toContain("ON CONFLICT DO NOTHING");
   });
 });
 

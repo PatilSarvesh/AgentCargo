@@ -1,0 +1,25 @@
+schema_version: 1
+name: dependency-review
+version: 0.1.0
+description: Review dependency changes for compatibility, maintenance risk, license obligations, and supply-chain exposure.
+license: Apache-2.0
+compatibility:
+  codex:
+    scopes:
+      - project
+      - user
+  claude-code:
+    scopes:
+      - project
+      - user
+capabilities:
+  filesystem:
+    read: true
+    write: false
+  shell: false
+  network: false
+  environment: []
+tags:
+  - dependencies
+  - supply-chain
+  - maintenance

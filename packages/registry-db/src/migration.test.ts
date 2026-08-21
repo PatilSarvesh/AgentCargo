@@ -83,4 +83,35 @@ describe("registry read-path migration", () => {
     expect(migration).toContain("registry_auth_sessions_scopes_check");
     expect(migration).not.toMatch(/DROP TABLE/i);
   });
+
+  it("adds bounded reports and append-only moderation audit events", async () => {
+    const migration = await readFile(new URL("../migrations/0008_registry_moderation.sql", import.meta.url), "utf8");
+
+    expect(migration).toContain("CREATE TABLE IF NOT EXISTS registry_reports");
+    expect(migration).toContain("UNIQUE (reporter_provider, reporter_subject, idempotency_key)");
+    expect(migration).toContain("CREATE TABLE IF NOT EXISTS registry_moderation_audit_events");
+    expect(migration).toContain("registry_moderation_audit_events_immutable");
+    expect(migration).toContain("moderation audit events are append-only");
+    expect(migration).not.toMatch(/DROP TABLE/i);
+  });
+
+  it("adds guarded release moderation state and idempotency", async () => {
+    const migration = await readFile(new URL("../migrations/0009_release_moderation.sql", import.meta.url), "utf8");
+
+    expect(migration).toContain("quarantine_previous_status");
+    expect(migration).toContain("idempotency_key");
+    expect(migration).toContain("registry_moderation_release_mutation_idx");
+    expect(migration).toContain("CREATE UNIQUE INDEX");
+    expect(migration).not.toMatch(/DROP TABLE/i);
+  });
+
+  it("adds the emergency digest denylist state table", async () => {
+    const migration = await readFile(new URL("../migrations/0010_digest_denylist.sql", import.meta.url), "utf8");
+
+    expect(migration).toContain("CREATE TABLE IF NOT EXISTS registry_digest_denylist");
+    expect(migration).toContain("sha256:[a-f0-9]{64}");
+    expect(migration).toContain("registry_digest_denylist_active_idx");
+    expect(migration).toContain("active boolean");
+    expect(migration).not.toMatch(/DROP TABLE/i);
+  });
 });
